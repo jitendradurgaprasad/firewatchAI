@@ -413,11 +413,15 @@ def test_investigation_report_contains_disclaimer_provenance_and_history():
 def test_streamlit_empty_state_smoke(monkeypatch, tmp_path):
     monkeypatch.setenv("FIREWATCH_DATA_DIR", str(tmp_path / "streamlit-empty"))
     monkeypatch.setenv("FIREWATCH_AUTOLOAD_SAMPLE", "0")
+    monkeypatch.setenv("FIRMS_MAP_KEY", "")
+    monkeypatch.setattr("firewatch.satellite_imagery.fetch_gibs_image",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("mock imagery unavailable")))
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
     assert not at.exception
-    assert any("No observations are loaded" in item.value for item in at.info)
-    for page in ("Import Data", "Observation Map", "Observation Table", "Priority Review Queue",
+    assert at.radio[0].value == "Live Monitoring"
+    for page in ("Overview", "Import Data", "Observation Map", "Observation Table", "Priority Review Queue",
+                 "Live Monitoring", "Satellite Image Viewer",
                  "Observation Details", "Feedback and Review History", "Spatial and Temporal Analysis",
                  "Notification Centre", "Data Validation", "Evaluation", "Settings and About"):
         at.radio[0].set_value(page).run()
@@ -427,6 +431,9 @@ def test_streamlit_empty_state_smoke(monkeypatch, tmp_path):
 def test_streamlit_populated_spatial_analysis_flow(monkeypatch, tmp_path):
     monkeypatch.setenv("FIREWATCH_DATA_DIR", str(tmp_path / "streamlit-synthetic"))
     monkeypatch.setenv("FIREWATCH_AUTOLOAD_SAMPLE", "0")
+    monkeypatch.setenv("FIRMS_MAP_KEY", "")
+    monkeypatch.setattr("firewatch.satellite_imagery.fetch_gibs_image",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("mock imagery unavailable")))
     conn = connect(tmp_path / "streamlit-synthetic" / "firewatch.sqlite3")
     csv = BASE + (
         "10,20,2026-01-01,0000,N20,VIIRS,n,2\n"

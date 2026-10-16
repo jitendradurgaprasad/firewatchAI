@@ -44,7 +44,7 @@ APP_ROOT = Path(__file__).resolve().parent
 load_dotenv()
 SAMPLE_PATH = APP_ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.csv"
 SAMPLE_META_PATH = APP_ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.json"
-NAV_ITEMS = ["Overview", "Import Data", "Observation Map", "Observation Table",
+NAV_ITEMS = ["Live Monitoring", "Overview", "Import Data", "Observation Map", "Observation Table",
              "Priority Review Queue", "Observation Details", "Feedback and Review History",
              "Spatial and Temporal Analysis", "Satellite Image Viewer", "Notification Centre",
              "Data Validation", "Evaluation", "Settings and About"]
@@ -55,12 +55,69 @@ def _live_satellite_image(layer_name: str, image_date: date) -> None:
     """Refresh only a rendered GIBS image every ten seconds; perform no analysis."""
     layer = GIBS_LAYERS[layer_name]
     try:
-        image, mime = fetch_gibs_image(build_gibs_image_url(layer, image_date))
+        image, mime = fetch_gibs_image(build_gibs_image_url(layer, image_date), timeout=15.0)
         st.image(image, caption=f"NASA GIBS rendered {layer_name} image · imagery date {image_date.isoformat()} · {mime}",
                  width="stretch")
         st.caption(f"Image request refreshed at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     except (RuntimeError, ValueError) as exc:
         st.error(str(exc))
+
+
+def _radar_animation() -> None:
+    """Draw a decorative scan sweep; it is not a detection algorithm."""
+    st.html("""
+    <div style="height:270px;display:flex;align-items:center;gap:26px;background:#081b20;border:1px solid #17434b;
+                border-radius:16px;padding:18px;color:#c7f9e9;font-family:Segoe UI,Arial,sans-serif">
+      <div style="position:relative;width:230px;height:230px;border-radius:50%;overflow:hidden;flex:none;
+                  background:radial-gradient(circle,#0b3840 0 2px,transparent 3px),
+                  repeating-radial-gradient(circle,#17434b 0 1px,transparent 2px 38px),
+                  linear-gradient(90deg,transparent 49.7%,#22616a 50%,transparent 50.3%),
+                  linear-gradient(0deg,transparent 49.7%,#22616a 50%,transparent 50.3%),#061216">
+        <div style="position:absolute;inset:0;border-radius:50%;transform-origin:50% 50%;
+                    background:conic-gradient(from 0deg,transparent 0 78%,rgba(44,255,183,.02) 84%,rgba(44,255,183,.5) 99%,transparent 100%);
+                    animation:firewatchSweep 4s linear infinite"></div>
+        <span style="position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px;border-radius:50%;
+                     background:#4effad;box-shadow:0 0 16px #4effad;animation:firewatchPulse 1.6s ease-out infinite"></span>
+      </div>
+      <div><div style="font-size:22px;font-weight:700;letter-spacing:1px">LIVE SATELLITE WATCH</div>
+        <div style="margin-top:8px;color:#6fffc2">● FIRMS query cycle: 60 seconds</div>
+        <div style="margin-top:5px;color:#86a9aa">Decorative radar sweep · detections come from FIRMS records</div>
+        <div style="margin-top:5px;color:#86a9aa">Not image-pixel analysis or a confirmed-fire alarm</div></div>
+    </div>
+    <style>@keyframes firewatchSweep{to{transform:rotate(360deg)}}
+    @keyframes firewatchPulse{0%{transform:scale(.8);opacity:1}100%{transform:scale(3.5);opacity:0}}</style>
+    """)
+
+
+@st.fragment(run_every=60)
+def _live_hotspot_monitor(product: str) -> None:
+    """Poll one bounded India FIRMS query and show its validated current result."""
+    try:
+        download = fetch_recent_area(area="60,5,100,38", product=product, day_range=1,
+                                     timeout_seconds=10)
+        result = ingest_firms_csv(download.content, source_description=download.source,
+                                  product=download.product,
+                                  retrieved_at=datetime.fromisoformat(download.retrieved_at),
+                                  original_filename=download.filename,
+                                  licence_attribution="NASA FIRMS Area API; possible satellite thermal anomalies.")
+        valid = result.valid.sort_values("acq_datetime", ascending=False) if not result.valid.empty else result.valid
+        cols = st.columns(3)
+        cols[0].metric("FIRMS detections returned", f"{len(valid):,}")
+        cols[1].metric("Rejected rows", f"{result.report['invalid_rows']:,}")
+        cols[2].metric("Last FIRMS check (UTC)", download.retrieved_at[11:19])
+        st.caption(f"Source: NASA FIRMS {download.product} · India region · recent {download.day_range} day · checked {download.retrieved_at}")
+        if valid.empty:
+            st.info("No detections were returned for this query window. This does not prove that no fire exists.")
+        else:
+            st.map(valid[["latitude", "longitude"]].rename(columns={"latitude": "lat", "longitude": "lon"}),
+                   color="#ff5722", size=80, zoom=4, height=380)
+            display_fields = [field for field in (
+                "acq_datetime", "latitude", "longitude", "satellite", "confidence", "frp", "bright_ti4")
+                if field in valid.columns]
+            st.dataframe(valid[display_fields].head(500), width="stretch", hide_index=True)
+        st.caption("This live feed displays FIRMS' processed detection records only. FireWatch does not infer hotspots from the image shown below.")
+    except (FirmsAPIError, IngestionError, ValueError) as exc:
+        st.error(f"Live FIRMS check unavailable: {exc}")
 
 
 def bootstrap_sample(conn) -> None:
@@ -370,11 +427,12 @@ def main() -> None:
         page = st.radio("Navigation", NAV_ITEMS, label_visibility="collapsed")
         st.divider()
         st.metric("Stored observations", int(conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]))
-        st.caption("Notification delivery: SIMULATION ONLY")
+        st.caption("Alerts: synthetic test email only · live FIRMS data is for human review")
 
     imports = list_imports(conn)
     token = _imports_token(conn)
-    if imports:
+    pages_without_scored_data = {"Live Monitoring", "Satellite Image Viewer", "Import Data"}
+    if imports and page not in pages_without_scored_data:
         weights_json = json.dumps(weights, sort_keys=True)
         reference_mode = settings.get("reference_mode", "Newest observation in dataset")
         now_utc = (datetime.now(timezone.utc).isoformat()
@@ -408,7 +466,17 @@ def main() -> None:
     if not scored.empty and scored.get("source_name", pd.Series(dtype=str)).astype(str).str.contains("SYNTHETIC", case=False).any():
         st.warning("Synthetic records are loaded. Their generator-defined labels and simulated locations are for software demonstration only; they do not represent real observations or establish real-world accuracy.")
 
-    if page == "Satellite Image Viewer":
+    if page == "Live Monitoring":
+        st.write("Live monitoring polls NASA FIRMS for processed satellite hotspot records. The animated radar is a visual status display; it does not scan or analyze the imagery pixels.")
+        _radar_animation()
+        st.caption("FIRMS hotspot products are observations derived from satellite instrument measurements. They are possible thermal anomalies, not confirmed wildfires. Image refresh (10 sec) and FIRMS query refresh (60 sec) are separate; neither changes satellite acquisition cadence.")
+        product = st.selectbox("FIRMS satellite product", PRODUCTS, index=0, key="live_monitor_product")
+        _live_hotspot_monitor(product)
+        st.subheader("Latest satellite image")
+        st.caption("Read-only VIIRS true-color image from NASA GIBS, requested every 10 seconds. No image inference or automatic alert decision is performed.")
+        _live_satellite_image("Suomi-NPP VIIRS true color", datetime.now(timezone.utc).date() - timedelta(days=1))
+
+    elif page == "Satellite Image Viewer":
         st.write("A read-only satellite imagery viewer. It displays NASA GIBS rendered VIIRS imagery and does not run FireWatch ranking, import records, or generate alerts.")
         st.warning("The FIRMS MAP_KEY is not used here: that key retrieves FIRMS fire-detection records/map services, not imagery. This tab uses NASA GIBS imagery separately and requires no FIRMS key.")
         st.caption("The image display refreshes every 10 seconds. The selected satellite image itself usually updates only when NASA publishes another processed scene; many GIBS near-real-time products appear a few hours after observation. Repeated refreshes can show the same image and do not mean a new satellite capture arrived.")

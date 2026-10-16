@@ -10,6 +10,8 @@ The FSI context is derived from MODIS/VIIRS satellite hotspots filtered against 
 
 Python 3.11 is recommended. From the repository root:
 
+On Windows, double-click `Start_FireWatch.bat` in the repository root to launch the interface. It uses the project `.venv` if present, then the configured local FireWatch environment, and finally Python 3.11 on PATH.
+
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -19,6 +21,8 @@ streamlit run app.py
 ```
 
 The default installation also retains requirements for the legacy image-classification prototype and its tests. The FIRMS dashboard does not import or run the PyTorch model, require a GPU, or train a model. Set `FIREWATCH_AUTOLOAD_SAMPLE=0` to start with an empty database.
+
+The app opens to **Live Monitoring**. It queries NASA FIRMS for the selected NRT hotspot product over India once per minute and displays the validated detections, with a decorative animated radar sweep. It also refreshes a rendered GIBS VIIRS true-color image every 10 seconds. The animation is visual only; hotspots come from FIRMS processed records, not image-pixel inference. Repeated queries can return the same detections until the provider publishes updates. This dashboard prioritizes possible anomalies for human review; it does not confirm wildfires.
 
 ## Included sample and provenance
 

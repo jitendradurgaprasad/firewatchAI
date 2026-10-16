@@ -14,6 +14,8 @@ streamlit run app.py
 
 The first launch loads the bundled public Academy sample into a SQLite database under `%LOCALAPPDATA%\FireWatchAI-dashboard`. The sample is static (retrieved 2026-10-16, acquisition date 2023-07-12), not live. Set `FIREWATCH_AUTOLOAD_SAMPLE=0` for an empty dashboard. To preserve a chosen database, set `FIREWATCH_DATA_DIR` or `FIREWATCH_DB_PATH` before launch.
 
+On Windows, you can instead double-click `Start_FireWatch.bat` in the repository root to start the interface. It opens to **Live Monitoring**. That page queries FIRMS once per minute and refreshes a rendered GIBS image every 10 seconds. It displays FIRMS-processed hotspot records; it does not find hotspots by analyzing image pixels. The animated radar sweep is decorative. If the API key is missing or the live request fails, the page shows the error rather than substituting synthetic detections.
+
 ## 2. Import observations
 
 Open **Import Data**. Either select a CSV or enter a local file path; do not provide both. Add the source description, product if known, and attribution/licence note. Uploads and paths are limited to 50 MiB and 100,000 rows. Review the reported row counts, source date coverage, available fields, missing fields, and rejected-row reasons on **Data Validation**. The validation/rejection CSV exports retain original fields. FIRMS acquisition times are normalized to UTC. Duplicate rows after the first copy are rejected.

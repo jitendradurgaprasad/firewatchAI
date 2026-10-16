@@ -111,3 +111,9 @@
 - Added a separate read-only **Satellite Image Viewer** tab. It requests regional rendered VIIRS true-color imagery from NASA GIBS WMS and refreshes the displayed image every 10 seconds. The date, satellite layer, and request time are visible.
 - Clarified in the UI and docs that the existing FIRMS MAP_KEY is for FIRMS fire-detection records/map services, not the imagery viewer. The image viewer uses GIBS separately and does not ingest pixels, calculate fire scores, or emit alerts.
 - Verified a live GIBS image request for 2026-10-15 returned a valid 246,318-byte JPEG. The ten-second refresh re-requests the selected image; it can show the same scene until NASA publishes an updated visualization.
+
+## Phase L — live monitoring home screen and Windows launcher (2026-10-16)
+
+- Made **Live Monitoring** the opening tab and added one bounded India FIRMS NRT query per minute while the page is open. Valid detections and coordinates are displayed with a decorative animated radar sweep. Live API results are not silently persisted or replaced with synthetic data if unavailable.
+- Added a separate 10-second GIBS image refresh on the home screen and kept the full image viewer and all project functions in the same navigation menu. FIRMS detections and GIBS imagery remain distinct; the app does not infer hotspots from image pixels.
+- Added `Start_FireWatch.bat` at the repository root to launch the Streamlit interface with a project or configured local Python environment.
