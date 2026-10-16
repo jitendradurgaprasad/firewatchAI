@@ -107,6 +107,7 @@ Run the suite with `python -m pytest -q`. Tests cover row accounting and duplica
 
 ## Detailed documentation
 
+- [Hackathon idea submission](docs/HACKATHON_SUBMISSION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [User guide](docs/USER_GUIDE.md)
 - [Demo script and judge questions](docs/DEMO_SCRIPT.md)
