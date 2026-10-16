@@ -11,6 +11,13 @@
 ## Phase B — image and ML foundation (in progress)
 
 - Implemented strict JPEG/PNG image validation, manifest validation, content-hash duplicate detection, event-disjoint splitting, ResNet-18 training and checkpoint metadata, structured abstaining inference, metrics, CLI, tests, and initial documentation.
-- Training/inference have not been run; no weights or actual labeled samples are available yet. Tests and Git gate pending.
+- `py -3.11 -m pytest -q`: 7 passed. `git diff --check`: passed. No large files or credential-like strings were staged.
+- Training/inference have not been run; no weights or actual labeled samples are available yet.
 - Files: `firewatch/`, `tests/`, `requirements.txt`, `pytest.ini`, `.gitignore`, `README.md`, `DEVELOPMENT_LOG.md`.
+- Commit: `fd2b8f7619dd8fb5132ff55a70a80e7b21d443a0` (`feat: add satellite fire classification foundation`). Push: verified on `origin/main` with `git ls-remote`; checkout clean at the gate.
+
+## Phase C — active-fire dataset sample inspection (in progress)
+
+- User approved downloading the 937.1 MB California Sentinel-2 Active-Fire Segmentation Dataset archive for local sample inspection; archive must remain outside Git.
+- Pending: download integrity check, sample/mask/metadata inspection, and dataset-specific preparation decision.
 - Commit/push: pending.
