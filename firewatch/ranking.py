@@ -10,8 +10,13 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 
-DEFAULT_WEIGHTS = {"recency": 0.20, "confidence": 0.25, "frp": 0.25,
-                   "repeat": 0.25, "completeness": 0.05}
+CORE_WEIGHTS = {"recency": 0.20, "confidence": 0.25, "frp": 0.25,
+                "repeat": 0.25, "completeness": 0.05}
+# Reserve 15% for a match to FSI's forest-area-filtered alert points. Core
+# weights retain their original relative proportions. With no imported context,
+# active core weights renormalize to the exact former score.
+DEFAULT_WEIGHTS = {**{key: value * 0.85 for key, value in CORE_WEIGHTS.items()},
+                   "forest_context": 0.15}
 CONFIDENCE_SCORE = {"low": 0.30, "nominal": 0.65, "high": 0.90}
 EARTH_RADIUS_KM = 6371.0088
 
@@ -84,7 +89,14 @@ def score_observations(
         raise ValueError("Scoring time, distance, and FRP scales must be positive.")
     if not 0 <= minimum_coverage <= 1 or not 0 <= medium_threshold < high_threshold <= 100:
         raise ValueError("Coverage must be 0–1 and thresholds must satisfy 0 ≤ medium < high ≤ 100.")
-    active_weights = dict(DEFAULT_WEIGHTS if weights is None else weights)
+    if weights is None:
+        active_weights = dict(DEFAULT_WEIGHTS)
+    elif set(weights) == set(CORE_WEIGHTS):
+        # Backward compatibility for saved settings from before forest context.
+        active_weights = {**{key: float(value) * 0.85 for key, value in weights.items()},
+                          "forest_context": 0.15}
+    else:
+        active_weights = dict(weights)
     if set(active_weights) != set(DEFAULT_WEIGHTS):
         raise ValueError(f"Weights must contain exactly: {', '.join(DEFAULT_WEIGHTS)}")
     if any(not math.isfinite(float(v)) or float(v) < 0 for v in active_weights.values()):
@@ -98,7 +110,8 @@ def score_observations(
     if result.empty:
         for col in ("priority_score", "priority_category", "score_coverage", "explanation",
                     "missing_factors", "repeat_count", "review_status", "contributing_factors",
-                    "data_quality_warnings"):
+                    "data_quality_warnings", "forest_context", "forest_context_matches",
+                    "forest_context_summary"):
             if col not in result:
                 result[col] = pd.Series(dtype="object")
         return result
@@ -126,15 +139,26 @@ def score_observations(
 
     scores, categories, coverages, explanations, missings, contributions_by_row = [], [], [], [], [], []
     for i in range(len(result)):
-        factors = {"recency": float(recency.iloc[i]) if pd.notna(recency.iloc[i]) else None,
+        core_factors = {"recency": float(recency.iloc[i]) if pd.notna(recency.iloc[i]) else None,
                    "confidence": confidence[i], "frp": frp_values[i],
                    "repeat": repeat_score[i]}
+        present_count = sum(val is not None for val in core_factors.values())
+        factors = {**core_factors, "completeness": present_count / len(core_factors)}
+        raw_forest_context = result.iloc[i].get("forest_context")
+        if raw_forest_context is None or pd.isna(raw_forest_context):
+            factors["forest_context"] = None
+        else:
+            factors["forest_context"] = 1.0 if bool(raw_forest_context) else 0.0
         missing = [key for key, val in factors.items() if val is None]
-        present_count = sum(val is not None for val in factors.values())
-        factors["completeness"] = present_count / len(factors)
         available = {k: v for k, v in factors.items() if v is not None and active_weights[k] > 0}
-        coverage = sum(active_weights[k] for k in available)
-        denominator = coverage or 1.0
+        available_weight = sum(active_weights[k] for k in available)
+        denominator = available_weight or 1.0
+        # An unknown optional forest-context source does not count as a missing
+        # measurement; coverage is relative to the factors that were configured.
+        coverage_denominator = (sum(active_weights[k] for k in DEFAULT_WEIGHTS
+                                    if k != "forest_context" and active_weights[k] > 0)
+                                if factors["forest_context"] is None else 1.0)
+        coverage = available_weight / coverage_denominator if coverage_denominator else 0.0
         score = 100 * sum(active_weights[k] * v for k, v in available.items()) / denominator
         if coverage < minimum_coverage or present_count < 2:
             category = "INSUFFICIENT INFORMATION"
@@ -154,6 +178,12 @@ def score_observations(
             contributions.append(f"{repeats[i]} nearby detection(s) within {repeat_radius_km:g} km and {repeat_window_hours:g} h")
         else:
             contributions.append(f"No nearby repeat in {repeat_radius_km:g} km / {repeat_window_hours:g} h window")
+        if factors["forest_context"] is not None:
+            match_count = int(result.iloc[i].get("forest_context_matches", 0) or 0)
+            summary = result.iloc[i].get("forest_context_summary", "")
+            contributions.append(f"FSI forest-area context: {match_count} spatial/time match(es)" +
+                                 (f" ({summary})" if summary else "") +
+                                 "; satellite alerts may share source detections and are not ground truth")
         contributions.append("Review priority only; this is not a fire-severity or confirmation score.")
         scores.append(round(score, 2))
         categories.append(category)

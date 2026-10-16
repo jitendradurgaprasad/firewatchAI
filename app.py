@@ -18,19 +18,23 @@ from dotenv import load_dotenv
 from firewatch.association import associate_observations
 from firewatch.evaluation import run_functional_evaluation
 from firewatch.exports import investigation_report_markdown, safe_csv_bytes
+from firewatch.forest_context import ForestContextError, match_forest_context, parse_fsi_points
 from firewatch.firms_api import FirmsAPIError, PRODUCTS, fetch_recent_area
 from firewatch.firms_ingest import IngestionError, MAX_CSV_BYTES, ingest_firms_csv
 from firewatch.map_view import create_observation_map, nearest_observation
 from firewatch.notifications import (SimulatedNotificationProvider, build_notification_payload,
                                      dispatch_notification,
                                      notification_dedupe_key)
-from firewatch.ranking import DEFAULT_WEIGHTS, score_observations
+from firewatch.ranking import CORE_WEIGHTS, DEFAULT_WEIGHTS, score_observations
 from firewatch.storage import (OUTCOMES, add_authority, add_notification, connect, database_path,
                                get_setting, latest_feedback, list_authorities, list_imports,
                                load_evaluations, load_feedback, load_notifications, load_observations,
+                               load_forest_context_points, list_forest_context_imports,
+                               load_forest_context_rejections,
                                load_observation_sources, notification_history,
                                load_rejections, resolve_recipient,
-                               save_evaluation, save_feedback, save_import, set_setting)
+                               save_evaluation, save_feedback, save_import,
+                               save_forest_context_import, set_setting)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -80,6 +84,7 @@ def cached_scored_data(db_file: str, cache_token: str, weights_json: str,
     observations = load_observations(conn)
     if observations.empty:
         return observations
+    observations = match_forest_context(observations, load_forest_context_points(conn))
     weights = json.loads(weights_json)
     reference = observations["acq_datetime"].max() if reference_mode == "Newest observation in dataset" else now_utc
     scored = score_observations(observations, weights=weights, reference_time=reference,
@@ -107,7 +112,8 @@ def cached_scored_data(db_file: str, cache_token: str, weights_json: str,
 def _imports_token(conn) -> str:
     row = conn.execute("SELECT COALESCE(MAX(created_at),''), COUNT(*) FROM imports").fetchone()
     feedback = conn.execute("SELECT COALESCE(MAX(feedback_id),0) FROM feedback").fetchone()[0]
-    return f"{row[0]}:{row[1]}:{feedback}"
+    forest = conn.execute("SELECT COALESCE(MAX(created_at),''), COUNT(*) FROM forest_context_imports").fetchone()
+    return f"{row[0]}:{row[1]}:{forest[0]}:{forest[1]}:{feedback}"
 
 
 def _selected_observation(frame: pd.DataFrame, key: str = "selected_observation_id") -> dict | None:
@@ -235,18 +241,31 @@ def _review_form(conn, observation: dict, authorities: pd.DataFrame) -> None:
                                  disabled=bool(reviewer_default))
         jurisdiction = st.selectbox("Manually verified jurisdiction", ["Unknown / not verified", *jurisdictions])
         verified = st.checkbox("I verified this jurisdiction using an authoritative source")
+        evidence_source = st.selectbox("Evidence source", ["Not recorded", "Official incident report",
+            "Field inspection / fire service report", "Post-fire imagery or burned-area record", "Other"])
+        evidence_reference = st.text_input("Evidence link or record reference (optional)")
+        event_id = st.text_input("Fire event ID (needed for event-aware evaluation)")
+        independent_evidence_reviewed = st.checkbox(
+            "I checked evidence independent of the FIRMS/VIIRS hotspot")
+        st.caption("FSI forest-area alert matches and the FIRMS point are correlated satellite evidence; they do not qualify as independent ground truth.")
         submitted = st.form_submit_button("Save review to audit history")
     if submitted:
         if verified and jurisdiction == "Unknown / not verified":
             st.error("Choose a configured jurisdiction before marking it verified.")
             return
         confidence = {"Not stated": None, "Low": .25, "Medium": .5, "High": .9}[confidence_choice]
+        if evidence_source == "Not recorded":
+            evidence_source = ""
         try:
             save_feedback(conn, observation_id=str(observation["observation_id"]), outcome=outcome,
                           assessment=assessment, confidence=confidence, notes=notes,
                           reviewer_id=reviewer,
                           verified_jurisdiction=jurisdiction if verified else None,
-                          jurisdiction_verified=verified)
+                          jurisdiction_verified=verified,
+                          evidence_source=evidence_source,
+                          evidence_reference=evidence_reference,
+                          event_id=event_id,
+                          independent_evidence_reviewed=independent_evidence_reviewed)
             st.success("Review saved. The original FIRMS row was preserved.")
             st.rerun()
         except ValueError as exc:
@@ -266,6 +285,10 @@ def _render_details(conn, scored: pd.DataFrame, authorities: pd.DataFrame) -> No
     st.write(f"**Observation time:** {observation.get('acq_datetime', 'Unknown')} (UTC)")
     st.write(f"**Satellite / instrument:** {observation.get('satellite') or 'Unknown'} / {observation.get('instrument') or 'Unknown'}")
     st.write(f"**Product:** {observation.get('product') or 'Not specified'} · **Source:** {observation.get('source_name') or 'Unknown'}")
+    forest_summary = observation.get("forest_context_summary") or "No matched FSI forest-area context"
+    st.write(f"**Forest context:** {forest_summary}")
+    if observation.get("forest_context") is not None and not pd.isna(observation.get("forest_context")):
+        st.caption("FSI context comes from forest-area-filtered satellite alerts; it is not independent confirmation of fire.")
     st.write(f"**Original file:** {observation.get('source_filename') or 'Unknown'} · **SHA-256:** {(observation.get('source_file_sha256') or 'Unavailable')[:16]}")
     available_fields = observation.get("available_fields") or []
     st.write("**Available source fields:** " + (", ".join(available_fields) if available_fields else "Not recorded"))
@@ -321,9 +344,12 @@ def main() -> None:
 
     settings = get_setting(conn, "dashboard", {})
     weights = settings.get("weights", DEFAULT_WEIGHTS.copy())
+    if set(weights) == set(CORE_WEIGHTS):
+        weights = {**{key: float(value) * .85 for key, value in weights.items()},
+                   "forest_context": .15}
     with st.sidebar:
         st.title("🔥 FireWatch AI")
-        st.caption("Satellite thermal-anomaly review · Human-in-the-loop")
+        st.caption("Forest-fire hotspot triage · Human-in-the-loop")
         page = st.radio("Navigation", NAV_ITEMS, label_visibility="collapsed")
         st.divider()
         st.metric("Stored observations", int(conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]))
@@ -361,7 +387,7 @@ def main() -> None:
     latest_import = imports[0] if imports else None
 
     st.title(page)
-    st.caption("FIRMS reports satellite thermal anomalies. A detection is a review cue, not confirmation of a wildfire or a measure of its severity.")
+    st.caption("Forest-fire hotspot triage. FIRMS and FSI provide satellite thermal-anomaly cues; a match adds forest-area context but does not confirm a wildfire or measure severity.")
 
     if page == "Overview":
         if scored.empty:
@@ -399,12 +425,13 @@ def main() -> None:
         st.subheader("Next items for review")
         st.dataframe(scored.sort_values("priority_score", ascending=False)[
             ["observation_id", "acq_datetime", "latitude", "longitude", "satellite", "confidence", "frp",
+             "forest_context_matches",
              "priority_score", "priority_category", "review_status"]].head(20),
             width="stretch", hide_index=True)
         st.warning("Priority categories are for investigation ordering only. They do not assert fire presence, severity, or emergency status.")
 
     elif page == "Import Data":
-        st.write("Upload a FIRMS-compatible CSV. Original fields and rejected source rows are retained in the local audit database.")
+        st.write("Upload FIRMS observations and, optionally, an FSI Fire Point Search CSV. FSI matches add forest-area context to the review score; they are not independent confirmation because FSI uses MODIS/VIIRS detections.")
         st.caption(f"Acquisition timestamps are interpreted as UTC. Interactive CSV limit: {MAX_CSV_BYTES // (1024 * 1024)} MiB. The bundled archive sample works without credentials.")
         with st.form("csv_import", clear_on_submit=True):
             uploaded = st.file_uploader("FIRMS CSV file", type=["csv"], accept_multiple_files=False)
@@ -455,6 +482,48 @@ def main() -> None:
                  width="stretch", hide_index=True)
         else:
             st.info("No imported sources yet.")
+
+        st.divider()
+        st.subheader("Import Forest Survey of India forest-area context")
+        st.write("Download a CSV from the [FSI Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search) and import it here. FireWatch matches points within 1 km and 12 hours. FSI defines these as satellite hotspots filtered to forest-area boundaries, so matches raise forest-context priority but are not confirmed-fire labels.")
+        with st.form("fsi_context_import", clear_on_submit=True):
+            fsi_csv = st.file_uploader("FSI Fire Point Search CSV", type=["csv"], key="fsi_context_file")
+            fsi_imported = st.form_submit_button("Validate and import FSI forest context")
+        if fsi_imported:
+            if fsi_csv is None:
+                st.error("Choose an FSI Fire Point Search CSV.")
+            else:
+                try:
+                    fsi_bytes = fsi_csv.getvalue()
+                    points = parse_fsi_points(fsi_bytes)
+                    report = dict(points.attrs)
+                    save_forest_context_import(conn, points, import_id=str(uuid.uuid4()),
+                        source="Forest Survey of India Fire Point Search",
+                        filename=fsi_csv.name, retrieved_at=datetime.now(timezone.utc).isoformat(),
+                        metadata={"portal": "https://fsiforestfire.gov.in/FirePointSearch/Search",
+                                  "file_size_bytes": len(fsi_bytes),
+                                  "file_sha256": hashlib.sha256(fsi_bytes).hexdigest(),
+                                  "match_radius_km": 1.0, "match_time_window_hours": 12,
+                                  "interpretation": "Satellite alerts filtered by FSI forest-area boundaries; not ground truth."})
+                    st.session_state["data_version"] = str(uuid.uuid4())
+                    cached_scored_data.clear()
+                    st.success(f"FSI context imported: {report['valid_rows']:,} valid points; {report['rejected_rows']:,} rejected of {report['total_rows']:,} rows.")
+                    st.rerun()
+                except (ForestContextError, UnicodeDecodeError, ValueError) as exc:
+                    st.error(f"FSI context import failed: {exc}")
+        fsi_imports = list_forest_context_imports(conn)
+        if fsi_imports:
+            summaries = [{"source": item["source"], "filename": item["filename"],
+                          **json.loads(item["report_json"]), "retrieved_at": item["retrieved_at"]}
+                         for item in fsi_imports]
+            st.dataframe(pd.DataFrame(summaries), width="stretch", hide_index=True)
+            fsi_rejections = load_forest_context_rejections(conn)
+            if not fsi_rejections.empty:
+                st.subheader("Rejected FSI point rows")
+                st.dataframe(fsi_rejections.drop(columns=["source_record"]).head(500),
+                             width="stretch", hide_index=True)
+                st.download_button("Export rejected FSI rows", safe_csv_bytes(fsi_rejections),
+                    file_name="fsi_forest_context_rejections.csv", mime="text/csv")
 
         st.divider()
         st.subheader("Refresh from NASA FIRMS Area API")
@@ -705,6 +774,16 @@ def main() -> None:
 
     elif page == "Evaluation":
         st.write("This page runs synthetic, labeled-as-synthetic checks of scoring behavior. It does not compare against independent fire labels and reports no real-world accuracy metrics.")
+        evidence_reviews = load_feedback(conn)
+        if evidence_reviews.empty:
+            eligible_reviews, evidence_events = 0, 0
+        else:
+            eligible = evidence_reviews.loc[evidence_reviews["independent_evidence_reviewed"].astype(bool)]
+            eligible_reviews = len(eligible)
+            evidence_events = eligible["event_id"].replace("", pd.NA).dropna().nunique()
+        st.metric("Evidence-backed reviews ready for event-aware evaluation",
+                  f"{eligible_reviews} reviews / {evidence_events} events")
+        st.caption("FSI/FIRMS matches are not independent labels. Event IDs keep observations from one incident together when evaluating the priority queue.")
         if st.button("Run functional scoring checks", type="primary"):
             result = run_functional_evaluation()
             save_evaluation(conn, result)
@@ -724,7 +803,7 @@ def main() -> None:
         st.subheader("Priority score configuration")
         with st.form("scoring_settings"):
             new_weights = {}
-            cols = st.columns(5)
+            cols = st.columns(6)
             for col, key in zip(cols, DEFAULT_WEIGHTS):
                 new_weights[key] = col.number_input(f"{key.title()} weight", min_value=0.0, max_value=1.0,
                     value=float(weights.get(key, DEFAULT_WEIGHTS[key])), step=.05, key=f"weight_{key}")
@@ -774,7 +853,7 @@ def main() -> None:
                 st.success("Scoring settings saved locally.")
                 st.rerun()
         st.markdown("""
-**Default formula.** Five review cues are combined with initial weights: recency 0.20, confidence 0.25, FRP 0.25, repeat detections 0.25, and completeness 0.05. Confidence maps low/nominal/high to 0.30/0.65/0.90; numeric confidence maps 0–100 linearly. FRP uses `log1p(FRP) / log1p(500 MW)`, capped at 1. Recency uses a configurable exponential half-life; by default it is relative to the newest observation in the loaded dataset. A repeat is another observation within 1 km and 24 hours; counts saturate at five. Confidence and FRP are related sensor signals and together are capped at half the default weight. Missing signals are omitted and remaining weights are renormalized. Less than 0.60 weight coverage is labelled **INSUFFICIENT INFORMATION**. Score thresholds are low below 45, medium 45–69.99, high 70 and above. These are configurable operational heuristics, not scientifically validated fire severity estimates.
+**Default formula.** The prior five cues retain their relative weights and are scaled to 85% when FSI context is available: recency 0.17, confidence 0.2125, FRP 0.2125, repeat detections 0.2125, and completeness 0.0425. A match to an FSI forest-area-filtered point within 1 km / 12 h contributes 0.15. With no imported FSI points, that factor is omitted and the old five-factor score is unchanged after normalization. FSI uses MODIS/VIIRS alerts and can overlap with FIRMS, so it is forest context, not independent proof of fire. Confidence maps low/nominal/high to 0.30/0.65/0.90; numeric confidence maps 0–100 linearly. FRP uses `log1p(FRP) / log1p(500 MW)`, capped at 1. Recency uses a configurable exponential half-life; by default it is relative to the newest observation in the loaded dataset. A repeat is another observation within 1 km and 24 hours; counts saturate at five. Missing signals are omitted and remaining weights are renormalized. Less than 0.60 weight coverage is labelled **INSUFFICIENT INFORMATION**. Score thresholds are low below 45, medium 45–69.99, high 70 and above. These are configurable operational heuristics, not scientifically validated fire severity estimates.
 
 **Spatial/time associations.** Connected components use unit-sphere KD-tree candidate search and haversine-equivalent distance, then retain edges only when acquisition timestamps are within the configured time window. The default is 5 km and 6 hours. Association IDs and nearby counts are organizational cues, not evidence of one fire. Distinct satellites are reported from observed metadata only.
 

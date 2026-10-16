@@ -81,6 +81,23 @@ def initialize(conn: sqlite3.Connection) -> None:
         reason TEXT NOT NULL,
         source_record TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS forest_context_imports (
+        import_id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        retrieved_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        report_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS forest_context_points (
+        point_id TEXT PRIMARY KEY,
+        import_id TEXT NOT NULL REFERENCES forest_context_imports(import_id),
+        source_row_number INTEGER NOT NULL,
+        point_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(import_id, source_row_number)
+    );
     CREATE TABLE IF NOT EXISTS feedback (
         feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
         observation_id TEXT NOT NULL REFERENCES observations(observation_id),
@@ -91,6 +108,10 @@ def initialize(conn: sqlite3.Connection) -> None:
         reviewer_id TEXT NOT NULL DEFAULT '',
         verified_jurisdiction TEXT,
         jurisdiction_verified INTEGER NOT NULL DEFAULT 0,
+        evidence_source TEXT NOT NULL DEFAULT '',
+        evidence_reference TEXT NOT NULL DEFAULT '',
+        event_id TEXT NOT NULL DEFAULT '',
+        independent_evidence_reviewed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_feedback_observation ON feedback(observation_id, feedback_id DESC);
@@ -145,6 +166,14 @@ def initialize(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE feedback ADD COLUMN verified_jurisdiction TEXT")
     if "jurisdiction_verified" not in feedback_columns:
         conn.execute("ALTER TABLE feedback ADD COLUMN jurisdiction_verified INTEGER NOT NULL DEFAULT 0")
+    for column, definition in (
+        ("evidence_source", "TEXT NOT NULL DEFAULT ''"),
+        ("evidence_reference", "TEXT NOT NULL DEFAULT ''"),
+        ("event_id", "TEXT NOT NULL DEFAULT ''"),
+        ("independent_evidence_reviewed", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in feedback_columns:
+            conn.execute(f"ALTER TABLE feedback ADD COLUMN {column} {definition}")
     notification_columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)")}
     if "duplicate_attempts" not in notification_columns:
         conn.execute("ALTER TABLE notifications ADD COLUMN duplicate_attempts INTEGER NOT NULL DEFAULT 0")
@@ -202,6 +231,55 @@ def list_imports(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in conn.execute("SELECT * FROM imports ORDER BY created_at DESC")]
 
 
+def save_forest_context_import(conn: sqlite3.Connection, points: pd.DataFrame, *, import_id: str,
+                               source: str, filename: str, retrieved_at: str,
+                               metadata: dict | None = None) -> None:
+    """Persist an FSI point CSV and row audit separately from FIRMS observations."""
+    metadata = dict(metadata or {})
+    valid = points.loc[points["rejection_reason"].eq("")] if not points.empty else points
+    rejected = points.loc[points["rejection_reason"].ne("")] if not points.empty else points
+    now = datetime.now(timezone.utc).isoformat()
+    report = {"total_rows": int(len(points)), "valid_rows": int(len(valid)),
+              "rejected_rows": int(len(rejected))}
+    conn.execute("INSERT INTO forest_context_imports VALUES(?,?,?,?,?,?,?)",
+                 (import_id, source, filename, retrieved_at,
+                  json.dumps(metadata, ensure_ascii=False), json.dumps(report), now))
+    for row in points.to_dict(orient="records"):
+        point_id = f"{import_id}:{row['source_row_number']}"
+        conn.execute("INSERT INTO forest_context_points VALUES(?,?,?,?,?)",
+                     (point_id, import_id, int(row["source_row_number"]),
+                      json.dumps(row, ensure_ascii=False, allow_nan=False), now))
+    conn.commit()
+
+
+def list_forest_context_imports(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(row) for row in conn.execute(
+        "SELECT * FROM forest_context_imports ORDER BY created_at DESC")]
+
+
+def load_forest_context_points(conn: sqlite3.Connection) -> pd.DataFrame:
+    rows = conn.execute("SELECT point_json FROM forest_context_points ORDER BY created_at, point_id").fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["fire_datetime", "source_sensor", "latitude", "longitude",
+                                     "rejection_reason", "state", "district", "division", "range", "beat"])
+    return pd.DataFrame([json.loads(row[0]) for row in rows])
+
+
+def load_forest_context_rejections(conn: sqlite3.Connection) -> pd.DataFrame:
+    rows = conn.execute("""SELECT i.import_id, i.filename, p.source_row_number, p.point_json
+                          FROM forest_context_points p JOIN forest_context_imports i USING(import_id)
+                          WHERE json_extract(p.point_json, '$.rejection_reason') != ''
+                          ORDER BY p.point_id DESC""").fetchall()
+    records = []
+    for row in rows:
+        point = json.loads(row["point_json"])
+        records.append({"import_id": row["import_id"], "filename": row["filename"],
+                        "source_row_number": row["source_row_number"],
+                        "rejection_reason": point.get("rejection_reason", ""),
+                        "source_record": json.dumps(point.get("source_record", {}), ensure_ascii=False)})
+    return pd.DataFrame(records)
+
+
 def load_observations(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute("SELECT normalized_json FROM observations ORDER BY created_at, observation_id").fetchall()
     if not rows:
@@ -237,7 +315,9 @@ def load_observation_sources(conn: sqlite3.Connection, observation_id: str) -> p
 def save_feedback(conn: sqlite3.Connection, *, observation_id: str, outcome: str,
                   assessment: str, confidence: float | None, notes: str = "",
                   reviewer_id: str = "", verified_jurisdiction: str | None = None,
-                  jurisdiction_verified: bool = False) -> int:
+                  jurisdiction_verified: bool = False, evidence_source: str = "",
+                  evidence_reference: str = "", event_id: str = "",
+                  independent_evidence_reviewed: bool = False) -> int:
     if outcome not in OUTCOMES:
         raise ValueError("Unsupported review outcome.")
     if confidence is not None and not 0 <= float(confidence) <= 1:
@@ -245,13 +325,21 @@ def save_feedback(conn: sqlite3.Connection, *, observation_id: str, outcome: str
     stamp = datetime.now(timezone.utc).isoformat()
     if jurisdiction_verified and not verified_jurisdiction:
         raise ValueError("A verified jurisdiction must be specified when marking it verified.")
+    if independent_evidence_reviewed and not all((evidence_source.strip(), evidence_reference.strip(), event_id.strip())):
+        raise ValueError("Independent evidence review requires its source, reference, and event ID.")
+    if independent_evidence_reviewed and outcome not in {
+        "Confirmed fire based on available evidence", "Non-fire thermal source"
+    }:
+        raise ValueError("Only a decisive fire/non-fire assessment can be marked for evaluation.")
     cur = conn.execute("""INSERT INTO feedback(observation_id,outcome,assessment,confidence,notes,reviewer_id,
-                          verified_jurisdiction,jurisdiction_verified,created_at)
-                          VALUES(?,?,?,?,?,?,?,?,?)""",
+                          verified_jurisdiction,jurisdiction_verified,evidence_source,evidence_reference,
+                          event_id,independent_evidence_reviewed,created_at)
+                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                        (observation_id, outcome, assessment.strip() or outcome,
                         float(confidence) if confidence is not None else None,
                         notes.strip(), reviewer_id.strip(), verified_jurisdiction,
-                        int(jurisdiction_verified), stamp))
+                        int(jurisdiction_verified), evidence_source.strip(), evidence_reference.strip(),
+                        event_id.strip(), int(independent_evidence_reviewed), stamp))
     conn.commit()
     return int(cur.lastrowid)
 

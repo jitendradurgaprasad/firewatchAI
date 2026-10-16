@@ -60,6 +60,14 @@ git diff --check                               passed
 
 The 42 tests include the retained legacy image-prototype suite. They do not imply that the old prototype is integrated with this FIRMS dashboard.
 
+## N. Forest-fire triage extension (2026-10-16)
+
+The project scope is now India-focused forest-fire hotspot triage. Optional CSVs from the [FSI Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search) are parsed into a separate local context table; test fixtures use the portal's published Fire Date / Time / Source / Lat / Lon fields. FSI defines a forest-fire detection as a MODIS/VIIRS hotspot filtered to Recorded Forest Area or Forest Cover Map boundaries ([FSI FAQ](https://fsiforestfire.gov.in/document/faq.pdf)). Since those detections may be the same satellite observations as FIRMS, this is a forest-area context feature, never ground truth.
+
+The new context factor is 15% when a point matches within 1 km and 12 hours. Unmatched context stays unknown. When no FSI context is imported, the existing five-factor score is unchanged after weight normalization. Human review now records an optional evidence source/reference, event ID, and an explicit independent-evidence-reviewed attestation; the attestation is gated on a decisive fire/non-fire outcome and all three fields. These fields prepare an event-disjoint evaluation dataset but do not claim accuracy.
+
+Using the configured local NASA key, one current NOAA-20 NRT query for the dashboard's default India-area box returned 289 rows; FireWatch accepted all 289. The CSV was saved outside the repository under `%LOCALAPPDATA%\FireWatchAI-data\FIRMS\live\`. This validates live acquisition and parsing only. It contains no independent fire labels. No FSI export was ingested, no ground-truth labels were created, and no model was trained.
+
 ## Accuracy boundary
 
 The bundled sample contains thermal anomalies and no independent incident-level wildfire truth labels. Precision, recall, F1, probability calibration, and wildfire-model accuracy are therefore not meaningful claims for this application. Synthetic checks verify software behavior only. See [LIMITATIONS.md](LIMITATIONS.md) for known constraints.

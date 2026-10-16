@@ -1,8 +1,10 @@
-# FireWatch AI — FIRMS satellite observation triage
+# FireWatch AI — forest-fire hotspot triage
 
-FireWatch AI is a local Streamlit dashboard for reviewing NASA FIRMS active-fire **thermal anomaly observations**. It ingests FIRMS-compatible CSVs, validates each source row, calculates an explainable review-priority score, displays observations on a map and table, and keeps reviewer feedback and simulated notification events in a local SQLite audit database.
+FireWatch AI is a local Streamlit dashboard for prioritizing possible forest fires in India from NASA FIRMS active-fire **thermal anomaly observations**. It ingests FIRMS-compatible CSVs and optional Forest Survey of India (FSI) forest-fire point exports, validates their rows, and calculates an explainable review-priority score. An FSI match adds forest-area context to the queue. The app records evidence-backed reviewer feedback and event IDs for future evaluation.
 
 A FIRMS hotspot is a satellite thermal anomaly. It is not a confirmed wildfire, a measure of fire severity, a burned-area label, or a substitute for an independent incident report. Scores only help order human review. This application does not contact emergency services or authorities.
+
+The FSI context is derived from MODIS/VIIRS satellite hotspots filtered against forest-area boundaries. It can identify a forest-area alert, but it is correlated with FIRMS detections and is not independent fire ground truth. FSI recommends using alerts alongside other sources. The project therefore remains a human-review triage tool; it does not claim prediction accuracy or train an image classifier.
 
 ## Run locally
 
@@ -36,13 +38,15 @@ Every parsed input row is retained as either a valid observation or a rejected r
 
 Use **Import Data** to add an uploaded CSV or local CSV path. Provide source, product if known, and licence/attribution details. These text fields record what was supplied; the app does not independently verify user-uploaded data rights or authenticity. Review validation counts, download rejection details, then use the map/table and observation details.
 
+To add forest-area context, download a CSV from the [FSI Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search) and upload it in the same page's FSI section. The adapter stores FSI points in a separate local table and matches them to FIRMS records within 1 km and 12 hours. FSI points are satellite alerts selected using forest-area boundaries and may reuse the same MODIS/VIIRS detections; the match is not independent ground truth.
+
 ### Optional NASA FIRMS live refresh
 
 The app implements NASA's official [Area CSV API](https://firms.modaps.eosdis.nasa.gov/api/area/), which requires a free [FIRMS MAP_KEY](https://firms.modaps.eosdis.nasa.gov/api/map_key/). Put it in a private local `.env` copied from `.env.example` as `FIRMS_MAP_KEY=...`, then restart Streamlit. The app never stores or displays the key. Requests use an allowlisted NRT product, bounded west/south/east/north coordinates, 1–5 days, a timeout and a 50 MiB response ceiling. Choose **Import Data → Refresh from NASA FIRMS Area API**. Without the key or network, the bundled static sample and CSV import remain available. The live request is never described as the static sample. There is no scheduled refresh.
 
 ## Review-priority calculation
 
-The default score combines recency (20%), FIRMS confidence (25%), FRP (25%), nearby repeat detections (25%), and input completeness (5%). FIRMS categorical confidence is mapped to fixed heuristic values (low 0.30, nominal 0.65, high 0.90); numeric confidence is interpreted on a 0–100 scale. FRP uses a configurable log scale that saturates at 500 MW. Recency uses a 72-hour half-life. Repeat detections count other observations within 1 km and 24 hours, capped at five for the factor score.
+The score combines recency (17%), FIRMS confidence (21.25%), FRP (21.25%), nearby repeat detections (21.25%), input completeness (4.25%), and a matched FSI forest-area alert (15%). If forest context has not been imported, that factor is unknown and the original five factors renormalize to their former effective weights (20%, 25%, 25%, 25%, 5%). Categorical confidence maps to fixed heuristic values (low 0.30, nominal 0.65, high 0.90); numeric confidence is interpreted on a 0–100 scale. FRP uses a configurable log scale that saturates at 500 MW. Recency uses a 72-hour half-life. Repeat detections count other observations within 1 km and 24 hours, capped at five for the factor score. An FSI match is within 1 km and 12 hours; unmatched observations remain unknown rather than being treated as non-forest.
 
 If factors are missing, remaining active weights are renormalized and missing factors are identified in the explanation. Coverage below 60%, or fewer than two available factors, yields **INSUFFICIENT INFORMATION**. Otherwise scores below 45 are low, 45–69.99 medium, and 70+ high review priority. These are configurable heuristics, not calibrated probabilities, fire severity, or operational thresholds. Confidence and FRP are related sensor signals; their combined default contribution is 50%, while custom weights may change that. Settings can change weights, thresholds, time/distance scales, FRP cap, and whether recency is referenced to the newest record or current UTC time.
 

@@ -9,13 +9,15 @@ from firewatch.evaluation import run_functional_evaluation
 from firewatch.exports import investigation_report_markdown, safe_csv_bytes
 from firewatch.firms_api import FirmsAPIError, fetch_recent_area
 from firewatch.firms_ingest import IngestionError, ingest_firms_csv
+from firewatch.forest_context import ForestContextError, match_forest_context, parse_fsi_points
 from firewatch.map_view import create_observation_map, map_ready_observations, nearest_observation
 from firewatch.notifications import (SimulatedNotificationProvider, build_notification_payload,
                                      dispatch_notification, notification_dedupe_key)
 from firewatch.ranking import score_observations
 from firewatch.storage import (add_authority, add_notification, connect, latest_feedback,
                                initialize, load_feedback, load_observation_sources, load_observations, resolve_recipient, save_feedback,
-                               save_import)
+                               save_forest_context_import, load_forest_context_points,
+                               load_forest_context_rejections, save_import)
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.csv"
@@ -83,6 +85,76 @@ def test_scoring_rejects_bad_weights():
     frame = pd.DataFrame([{"latitude":0,"longitude":0,"acq_datetime":"2026-01-01","confidence":"high","frp":1}])
     with pytest.raises(ValueError):
         score_observations(frame, weights={"recency":-1,"confidence":0,"frp":0,"repeat":0,"completeness":0})
+
+
+def test_fsi_context_csv_validates_rows_and_preserves_portal_fields():
+    csv = ("Fire Date,Time,Source,Lat,Lon,State,District,Division,Range,Beat\n"
+           "2026-10-15,01:09:55,VIIRS,17.464672,80.653850,TELANGANA,DISTRICT,DIVISION,RANGE,BEAT\n"
+           "2026-10-15,01:09:55,VIIRS,17.464672,80.653850,TELANGANA,DISTRICT,DIVISION,RANGE,BEAT\n"
+           "2026-10-15,01:09:55,MODIS,999,80,TELANGANA,DISTRICT,DIVISION,RANGE,BEAT\n")
+    points = parse_fsi_points(csv.encode())
+    assert points.attrs == {"filename":"fsi_forest_fire_points.csv", "total_rows":3,
+                            "valid_rows":1, "rejected_rows":2}
+    assert points.iloc[0].fire_datetime == "2026-10-15T01:09:55"
+    assert points.iloc[0].division == "DIVISION"
+    assert points.iloc[1].rejection_reason == "duplicate_point"
+    assert "invalid_latitude" in points.iloc[2].rejection_reason
+    with pytest.raises(ForestContextError, match="Missing required FSI columns"):
+        parse_fsi_points(b"lat,lon\n10,20\n")
+
+
+def test_fsi_spatiotemporal_match_is_context_only_and_changes_review_rank():
+    rows = pd.DataFrame([
+        {"observation_id":"match", "latitude":17.46467, "longitude":80.65385,
+         "acq_datetime":"2026-10-15T01:00:00Z", "confidence":"nominal", "frp":10},
+        {"observation_id":"far", "latitude":12, "longitude":75,
+         "acq_datetime":"2026-10-15T01:00:00Z", "confidence":"nominal", "frp":10},
+        {"observation_id":"late", "latitude":17.46467, "longitude":80.65385,
+         "acq_datetime":"2026-10-16T14:00:00Z", "confidence":"nominal", "frp":10},
+    ])
+    points = parse_fsi_points(("Fire Date,Time,Source,Lat,Lon,State\n"
+                               "2026-10-15,01:09:55,VIIRS,17.464672,80.653850,TELANGANA\n").encode())
+    matched = match_forest_context(rows, points)
+    assert matched.forest_context.tolist()[:2] == [1.0, None]
+    assert matched.forest_context_matches.tolist() == [1, 0, 0]
+    baseline = score_observations(rows, reference_time="2026-10-16T14:00:00Z")
+    forest_scored = score_observations(matched, reference_time="2026-10-16T14:00:00Z")
+    assert baseline.score_coverage.eq(1.0).all()
+    assert forest_scored.score_coverage.eq(1.0).all()
+    assert forest_scored.iloc[0].priority_score > baseline.iloc[0].priority_score
+    assert forest_scored.iloc[1].priority_score == pytest.approx(baseline.iloc[1].priority_score)
+    assert "not ground truth" in forest_scored.iloc[0].explanation
+    # Old saved five-factor user settings reproduce the original uncontextualized score.
+    legacy = score_observations(rows, weights={"recency":.20,"confidence":.25,"frp":.25,
+                                "repeat":.25,"completeness":.05},
+                                reference_time="2026-10-16T14:00:00Z")
+    assert legacy.priority_score.tolist() == baseline.priority_score.tolist()
+
+
+def test_fsi_context_persistence_and_evidence_backed_review_gate(tmp_path):
+    conn = connect(tmp_path / "forest.sqlite")
+    rows = ingest_firms_csv((BASE + "17.464672,80.653850,2026-10-15,0100,N20,VIIRS,n,10\n").encode())
+    save_import(conn, rows, import_id="firms")
+    points = parse_fsi_points(("Fire Date,Time,Source,Lat,Lon,State\n"
+                               "2026-10-15,01:09:55,VIIRS,17.464672,80.653850,TELANGANA\n").encode())
+    save_forest_context_import(conn, points, import_id="fsi", source="FSI", filename="fsi.csv",
+                               retrieved_at="2026-10-16T00:00:00Z")
+    assert len(load_forest_context_points(conn)) == 1
+    assert load_forest_context_rejections(conn).empty
+    observation_id = load_observations(conn).iloc[0]["observation_id"]
+    with pytest.raises(ValueError, match="source, reference, and event ID"):
+        save_feedback(conn, observation_id=observation_id,
+                      outcome="Confirmed fire based on available evidence", assessment="confirmed",
+                      confidence=.9, independent_evidence_reviewed=True)
+    save_feedback(conn, observation_id=observation_id,
+                  outcome="Confirmed fire based on available evidence", assessment="confirmed",
+                  confidence=.9, evidence_source="Field inspection / fire service report",
+                  evidence_reference="inspection-42", event_id="event-1",
+                  independent_evidence_reviewed=True)
+    feedback = load_feedback(conn, observation_id).iloc[0]
+    assert feedback.evidence_reference == "inspection-42"
+    assert feedback.event_id == "event-1" and feedback.independent_evidence_reviewed == 1
+    conn.close()
 
 
 def test_repeat_detection_uses_utc_elapsed_hours_not_pandas_storage_units():

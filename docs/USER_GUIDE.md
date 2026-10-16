@@ -18,6 +18,12 @@ The first launch loads the bundled public Academy sample into a SQLite database 
 
 Open **Import Data**. Either select a CSV or enter a local file path; do not provide both. Add the source description, product if known, and attribution/licence note. Uploads and paths are limited to 50 MiB and 100,000 rows. Review the reported row counts, source date coverage, available fields, missing fields, and rejected-row reasons on **Data Validation**. The validation/rejection CSV exports retain original fields. FIRMS acquisition times are normalized to UTC. Duplicate rows after the first copy are rejected.
 
+### Add forest-area context from FSI
+
+On the FSI [Forest Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search), filter the dates and area you need and use **Download CSV**. In FireWatch's **Import Data** page, upload that export under **Import Forest Survey of India forest-area context**. FireWatch validates the date/time, sensor, coordinates, and duplicate points while retaining source rows. It matches within 1 km and 12 hours; unmatched observations remain unknown and are not penalized.
+
+FSI defines forest-fire detections as MODIS/VIIRS thermal hotspots filtered by forest-area boundaries (Recorded Forest Area or Forest Cover Maps). FSI and FIRMS can share the same satellite hotspot, so a match adds forest-area context but is not independent confirmation. [FSI FAQ](https://fsiforestfire.gov.in/document/faq.pdf). Check the FSI portal's terms before redistributing its exports; FireWatch stores them locally.
+
 ### Optional recent FIRMS refresh
 
 The official [FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) requires a free MAP_KEY. Request one from [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/api/map_key/), then put it in a local `.env` file copied from `.env.example`:
@@ -40,7 +46,7 @@ Keep `.env` private. Restart Streamlit, visit **Import Data**, select an allowli
 
 Open **Observation Details**, select the record, and inspect source/product, UTC time, coordinates, sensor fields, score and factor explanation, missing data, association, raw source row, previous feedback, and notification history. The Markdown investigation report contains this information and an unverified-anomaly disclaimer.
 
-Use **Record a human review** to append an outcome and optional assessment, confidence, notes, reviewer ID and manually verified jurisdiction. Each submission creates a new row; it does not change measurements or erase previous reviews. Feedback is a reviewer assessment, not independent ground truth.
+Use **Record a human review** to append an outcome and optional assessment, confidence, notes, reviewer ID, event ID, and evidence source/reference. Mark evidence independent only when it is not derived from the FIRMS/VIIRS hotspot. A decisive fire/non-fire assessment can be marked for future evaluation only when a source, reference, and event ID are supplied. Each submission creates a new row; it does not change measurements or erase previous reviews.
 
 ## 5. Simulated notifications
 
@@ -48,7 +54,7 @@ In **Notification Centre**, select an observation and provide a trigger purpose.
 
 ## 6. Configure and export
 
-**Settings and About** lets you set five weights, score thresholds, coverage minimum, recency half-life, repeat radius/window, FRP saturation scale, association enablement/distance/time window, and map cap. Weights must be non-negative with positive sum; medium threshold must remain below high. Settings persist in SQLite.
+**Settings and About** lets you set six weights, score thresholds, coverage minimum, recency half-life, repeat radius/window, FRP saturation scale, association enablement/distance/time window, and map cap. Weights must be non-negative with positive sum; medium threshold must remain below high. Settings persist in SQLite. Without FSI data, the missing forest-context factor is omitted and the previous five-factor ranking is preserved after normalization.
 
 Use page-level CSV downloads for filtered observations, queue, association summary, rejected rows, validation summary, feedback, notifications, and evaluation history. Individual reports download as Markdown. CSV string fields are protected against common spreadsheet formula injection. Exports do not contain FIRMS API credentials.
 
