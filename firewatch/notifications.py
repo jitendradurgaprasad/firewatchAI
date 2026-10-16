@@ -70,6 +70,56 @@ class FormSubmitNotificationProvider:
     def __init__(self, *, timeout: float = 20.0):
         self.timeout = float(timeout)
 
+    def _submit(self, form_data: dict, recipient: str) -> dict:
+        if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}", recipient.strip()):
+            raise ValueError("A valid ERS recipient email is required.")
+        endpoint = "https://formsubmit.co/ajax/" + recipient.strip()
+        request = urllib.request.Request(endpoint,
+            data=json.dumps(form_data, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = response.read(64 * 1024).decode("utf-8", errors="replace")
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f"FormSubmit returned HTTP {response.status}.")
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"FormSubmit returned HTTP {exc.code}; check recipient activation and service status.") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise RuntimeError("Could not reach FormSubmit; no delivery was confirmed.") from None
+        try:
+            result = json.loads(body)
+        except json.JSONDecodeError:
+            raise RuntimeError("FormSubmit returned an unrecognized response; delivery is unconfirmed.") from None
+        if str(result.get("success", "")).lower() not in {"true", "1"}:
+            detail = str(result.get("message", "Submission was not accepted."))[:240]
+            raise RuntimeError(f"FormSubmit did not accept the request: {detail}")
+        return {"status": "provider-accepted",
+                "response": "FormSubmit accepted the request; inbox delivery and recipient activation are unconfirmed."}
+
+    def deliver_run_notice(self, payload: dict, recipient: str) -> dict:
+        """Send a once-per-process session notice, never phrased as a fire alarm."""
+        message = (
+            "FIREWATCH DEMONSTRATION SESSION STARTED\n\n"
+            "This is a system-status notice, not a fire alert. FireWatch has started its local monitoring view.\n"
+            f"Run started (UTC): {payload.get('run_started_utc', 'unknown')}\n"
+            f"FIRMS product: {payload.get('product', 'unknown')}\n"
+            f"FIRMS feed status: {payload.get('feed_status', 'not checked')}\n"
+            f"Rows returned: {payload.get('detection_count', 'unknown')}\n\n"
+            "A FIRMS row is an unconfirmed satellite thermal anomaly. No incident has been verified and no response has been dispatched."
+        )
+        return self._submit({
+            "_subject": "[FireWatch demo] Monitoring session started",
+            "_template": "table",
+            "name": "FireWatch AI demo status",
+            "notice_type": "Session start — not a fire alert",
+            "run_started_utc": str(payload.get("run_started_utc", "unknown")),
+            "firms_product": str(payload.get("product", "unknown")),
+            "feed_status": str(payload.get("feed_status", "not checked")),
+            "detection_count": str(payload.get("detection_count", "unknown")),
+            "message": message,
+        }, recipient)
+
     def deliver(self, payload: dict, recipient: str) -> dict:
         if payload.get("synthetic_data") or payload.get("test_only"):
             raise ValueError("ERS email is disabled for synthetic/demo observations.")
@@ -84,9 +134,6 @@ class FormSubmitNotificationProvider:
         age_hours = (datetime.now(timezone.utc) - acquired.astimezone(timezone.utc)).total_seconds() / 3600
         if age_hours < -0.25 or age_hours > 144:
             raise ValueError("ERS email is limited to FIRMS observations from the last six days.")
-        if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}", recipient.strip()):
-            raise ValueError("A valid ERS recipient email is required.")
-
         message = (
             "FIREWATCH REVIEW REQUEST — UNCONFIRMED SATELLITE THERMAL ANOMALY\n\n"
             "This is an informational request for manual authority review. It is not a confirmed wildfire, "
@@ -121,29 +168,7 @@ class FormSubmitNotificationProvider:
             "jurisdiction": str(payload.get("jurisdiction", "Unknown — manual review required")),
             "message": message,
         }
-        endpoint = "https://formsubmit.co/ajax/" + recipient.strip()
-        request = urllib.request.Request(endpoint,
-            data=json.dumps(form_data, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST")
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                body = response.read(64 * 1024).decode("utf-8", errors="replace")
-                if response.status < 200 or response.status >= 300:
-                    raise RuntimeError(f"FormSubmit returned HTTP {response.status}.")
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"FormSubmit returned HTTP {exc.code}; check recipient activation and service status.") from None
-        except (urllib.error.URLError, TimeoutError, OSError):
-            raise RuntimeError("Could not reach FormSubmit; no delivery was confirmed.") from None
-        try:
-            result = json.loads(body)
-        except json.JSONDecodeError:
-            raise RuntimeError("FormSubmit returned an unrecognized response; delivery is unconfirmed.") from None
-        if str(result.get("success", "")).lower() not in {"true", "1"}:
-            detail = str(result.get("message", "Submission was not accepted."))[:240]
-            raise RuntimeError(f"FormSubmit did not accept the request: {detail}")
-        return {"status": "provider-accepted",
-                "response": "FormSubmit accepted the review request; inbox delivery and recipient activation are unconfirmed."}
+        return self._submit(form_data, recipient)
 
 
 def build_notification_payload(observation: dict, *, trigger_reason: str,

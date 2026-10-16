@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import uuid
+from threading import Thread
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from firewatch.notifications import (SimulatedNotificationProvider, build_notifi
                                      notification_dedupe_key)
 from firewatch.ranking import CORE_WEIGHTS, DEFAULT_WEIGHTS, score_observations
 from firewatch.storage import (OUTCOMES, add_authority, add_notification, connect, database_path,
+                               claim_startup_email_run, update_startup_email_run, get_startup_email_run,
                                get_setting, latest_feedback, list_authorities, list_imports,
                                load_evaluations, load_feedback, load_notifications, load_observations,
                                load_forest_context_points, list_forest_context_imports,
@@ -49,6 +51,55 @@ NAV_ITEMS = ["Live Monitoring", "Overview", "Import Data", "Observation Map", "O
              "Priority Review Queue", "Observation Details", "Feedback and Review History",
              "Spatial and Temporal Analysis", "Satellite Image Viewer", "Notification Centre",
              "Data Validation", "Evaluation", "Settings and About"]
+
+
+@st.cache_resource
+def _app_process_run_id() -> str:
+    """One stable ID for the lifetime of this Streamlit server process."""
+    return uuid.uuid4().hex
+
+
+def _send_run_start_notice(product: str, feed_status: str, detection_count: int) -> dict | None:
+    """Send at most one status email per app process, never a fire alarm."""
+    if os.environ.get("FIREWATCH_RUN_NOTICE_ENABLED", "0").strip().lower() not in {"1", "true", "yes"}:
+        return None
+    # AppTest and pytest must never cause real external messages, even if a local
+    # developer .env has run notices enabled.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+    recipient = os.environ.get("FIREWATCH_ERS_EMAIL", "").strip()
+    if not recipient:
+        return {"status": "disabled", "details": "FIREWATCH_ERS_EMAIL is not configured."}
+    run_id = _app_process_run_id()
+    conn = connect(database_path())
+    try:
+        if not claim_startup_email_run(conn, run_id=run_id, recipient=recipient):
+            return get_startup_email_run(conn, run_id)
+        Thread(target=_deliver_run_start_notice,
+               args=(run_id, recipient, product, feed_status, detection_count),
+               name="firewatch-run-email", daemon=True).start()
+        return get_startup_email_run(conn, run_id)
+    finally:
+        conn.close()
+
+
+def _deliver_run_start_notice(run_id: str, recipient: str, product: str,
+                              feed_status: str, detection_count: int) -> None:
+    conn = connect(database_path())
+    try:
+        response = FormSubmitNotificationProvider().deliver_run_notice({
+            "run_started_utc": datetime.now(timezone.utc).isoformat(),
+            "product": product,
+            "feed_status": feed_status,
+            "detection_count": detection_count,
+        }, recipient)
+        update_startup_email_run(conn, run_id=run_id, status=response["status"],
+                                 details=response["response"])
+    except Exception as exc:
+        update_startup_email_run(conn, run_id=run_id, status="failed",
+                                 details=f"{type(exc).__name__}: {exc}")
+    finally:
+        conn.close()
 
 
 @st.fragment(run_every=10)
@@ -102,11 +153,14 @@ def _live_hotspot_monitor(product: str) -> None:
                                   original_filename=download.filename,
                                   licence_attribution="NASA FIRMS Area API; possible satellite thermal anomalies.")
         valid = result.valid.sort_values("acq_datetime", ascending=False) if not result.valid.empty else result.valid
+        run_notice = _send_run_start_notice(product, "FIRMS query succeeded", len(valid))
         cols = st.columns(3)
         cols[0].metric("FIRMS detections returned", f"{len(valid):,}")
         cols[1].metric("Rejected rows", f"{result.report['invalid_rows']:,}")
         cols[2].metric("Last FIRMS check (UTC)", download.retrieved_at[11:19])
         st.caption(f"Source: NASA FIRMS {download.product} · India region · recent {download.day_range} day · checked {download.retrieved_at}")
+        if run_notice:
+            st.caption(f"ERS session notice: {run_notice.get('status', 'unknown')}. Provider acceptance is not inbox-delivery confirmation.")
         if valid.empty:
             st.info("No detections were returned for this query window. This does not prove that no fire exists.")
         else:
@@ -118,6 +172,9 @@ def _live_hotspot_monitor(product: str) -> None:
             st.dataframe(valid[display_fields].head(500), width="stretch", hide_index=True)
         st.caption("This live feed displays FIRMS' processed detection records only. FireWatch does not infer hotspots from the image shown below.")
     except (FirmsAPIError, IngestionError, ValueError) as exc:
+        run_notice = _send_run_start_notice(product, f"FIRMS query unavailable: {exc}", 0)
+        if run_notice:
+            st.caption(f"ERS session notice: {run_notice.get('status', 'unknown')}. Any email reports feed status only.")
         st.error(f"Live FIRMS check unavailable: {exc}")
 
 
@@ -413,7 +470,7 @@ def _render_details(conn, scored: pd.DataFrame, authorities: pd.DataFrame) -> No
 
 def main() -> None:
     st.set_page_config(page_title="FireWatch AI | FIRMS Triage", page_icon="🔥",
-                       layout="wide", initial_sidebar_state="expanded")
+                       layout="wide", initial_sidebar_state="collapsed")
     conn = connect()
     bootstrap_sample(conn)
 
@@ -428,7 +485,7 @@ def main() -> None:
         page = st.radio("Navigation", NAV_ITEMS, label_visibility="collapsed")
         st.divider()
         st.metric("Stored observations", int(conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]))
-        st.caption("Alerts: synthetic test email only · live FIRMS data is for human review")
+        st.caption("ERS email: session status only; anomalies remain unconfirmed")
 
     imports = list_imports(conn)
     token = _imports_token(conn)
@@ -463,8 +520,9 @@ def main() -> None:
     latest_import = imports[0] if imports else None
 
     st.title(page)
-    st.caption("Forest-fire hotspot triage. FIRMS and FSI provide satellite thermal-anomaly cues; a match adds forest-area context but does not confirm a wildfire or measure severity.")
-    if not scored.empty and scored.get("source_name", pd.Series(dtype=str)).astype(str).str.contains("SYNTHETIC", case=False).any():
+    if page != "Live Monitoring":
+        st.caption("Forest-fire hotspot triage. FIRMS and FSI provide satellite thermal-anomaly cues; a match adds forest-area context but does not confirm a wildfire or measure severity.")
+    if page != "Live Monitoring" and not scored.empty and scored.get("source_name", pd.Series(dtype=str)).astype(str).str.contains("SYNTHETIC", case=False).any():
         st.warning("Synthetic records are loaded. Their generator-defined labels and simulated locations are for software demonstration only; they do not represent real observations or establish real-world accuracy.")
 
     if page == "Live Monitoring":

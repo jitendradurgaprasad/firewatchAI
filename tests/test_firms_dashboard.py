@@ -19,7 +19,8 @@ from firewatch.ranking import score_observations
 from firewatch.storage import (add_authority, add_notification, connect, latest_feedback,
                                initialize, load_feedback, load_observation_sources, load_observations, resolve_recipient, save_feedback,
                                save_forest_context_import, load_forest_context_points,
-                               load_forest_context_rejections, save_import)
+                               load_forest_context_rejections, save_import,
+                               claim_startup_email_run, update_startup_email_run, get_startup_email_run)
 from firewatch.synthetic_demo import generate_synthetic_forest_demo, write_synthetic_forest_demo
 from firewatch.satellite_imagery import GIBS_LAYERS, build_gibs_image_url, fetch_gibs_image
 from datetime import date
@@ -333,12 +334,30 @@ def test_formsubmit_provider_sends_only_recent_real_firms_review_requests(monkey
     assert seen["fields"]["coordinates"] == "10.5, 78.25"
     assert "not a confirmed wildfire" in seen["fields"]["message"]
     assert "decide any response" in seen["fields"]["message"]
+    run_result = provider.deliver_run_notice({
+        "run_started_utc": datetime.now(timezone.utc).isoformat(),
+        "product": "VIIRS_NOAA20_NRT", "feed_status": "FIRMS query succeeded",
+        "detection_count": 0,
+    }, "ers@example.test")
+    assert run_result["status"] == "provider-accepted"
+    assert seen["fields"]["notice_type"] == "Session start — not a fire alert"
+    assert "not a fire alert" in seen["fields"]["message"]
 
     with pytest.raises(ValueError, match="synthetic/demo"):
         provider.deliver({**payload, "synthetic_data": True}, "ers@example.test")
     with pytest.raises(ValueError, match="last six days"):
         provider.deliver({**payload, "observation_datetime_utc": "2020-01-01T00:00:00+00:00"},
                          "ers@example.test")
+
+
+def test_startup_notice_is_claimed_only_once_per_app_run(tmp_path):
+    conn = connect(tmp_path / "startup-notices.sqlite")
+    assert claim_startup_email_run(conn, run_id="run-1", recipient="ers@example.test")
+    assert not claim_startup_email_run(conn, run_id="run-1", recipient="ers@example.test")
+    update_startup_email_run(conn, run_id="run-1", status="provider-accepted", details="mock accepted")
+    assert get_startup_email_run(conn, "run-1")["status"] == "provider-accepted"
+    assert claim_startup_email_run(conn, run_id="run-2", recipient="ers@example.test")
+    conn.close()
 def test_csv_formula_injection_and_functional_evaluation(tmp_path):
     data = safe_csv_bytes(pd.DataFrame({"text":["=1+1", " normal"], "value":[-3, 2]})).decode("utf-8-sig")
     assert "'=1+1" in data and ", -3" not in data

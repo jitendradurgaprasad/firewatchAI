@@ -7,7 +7,10 @@
 - Synthetic, bundled historical sample, and user-uploaded records are blocked from this external email route. Duplicate requests are audited and suppressed; retries are available only after a failed recorded attempt. Existing simulation notifications and synthetic-only SMTP tests remain separate.
 - FormSubmit requires first-use recipient activation and reports only provider acceptance, not inbox delivery. Its documentation states submissions are retained for 30 days. No automatic background email loop or nearest-service lookup was added.
 - Configuration, provider behavior, retry scope, FormSubmit retention, manual-review disclaimer, and the control restrictions are documented in the README, user guide, and limitations. The destination address remains in ignored `.env`; it is not in Git.
-- Added a mocked FormSubmit provider test. Focused test passed; full suite passed using `%LOCALAPPDATA%\\FireWatchAI\\venv` (results collected during this change). No real FormSubmit request was made.
+- Added a mocked FormSubmit provider test. Focused email tests passed; full suite passed (50 tests) using `%LOCALAPPDATA%\\FireWatchAI\\venv`. Tests used mocked delivery; no real FormSubmit request was made.
+- Updated the launch experience to start with the sidebar collapsed. The Live Monitoring landing page remains focused on the radar animation, current FIRMS map/data, and rendered satellite image.
+- Added an opt-in per-server-run status email (`FIREWATCH_RUN_NOTICE_ENABLED`) with a persistent run-id audit guard. It is triggered once on the first Live Monitoring FIRMS poll, including a feed-status-only notice when that query fails; the content explicitly says it is not a fire alert. The user's ignored local `.env` enables this notice for the requested test inbox.
+- Startup status submission runs in a daemon worker so the dashboard remains responsive. Pytest/AppTest processes are explicitly prevented from making real outbound requests.
 
 ## Phase A — repository inspection
 

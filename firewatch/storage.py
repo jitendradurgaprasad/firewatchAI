@@ -160,6 +160,14 @@ def initialize(conn: sqlite3.Connection) -> None:
         value_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS startup_email_runs (
+        run_id TEXT PRIMARY KEY,
+        recipient TEXT NOT NULL,
+        status TEXT NOT NULL,
+        details TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
     """)
     feedback_columns = {row[1] for row in conn.execute("PRAGMA table_info(feedback)")}
     if "verified_jurisdiction" not in feedback_columns:
@@ -476,3 +484,26 @@ def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
                     ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at""",
                  (key, json.dumps(value, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
     conn.commit()
+
+
+def claim_startup_email_run(conn: sqlite3.Connection, *, run_id: str, recipient: str) -> bool:
+    """Atomically reserve at most one startup notice for a Streamlit process run."""
+    stamp = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute("""INSERT OR IGNORE INTO startup_email_runs
+        (run_id,recipient,status,details,created_at,updated_at) VALUES(?,?, 'pending','',?,?)""",
+        (run_id, recipient, stamp, stamp))
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def update_startup_email_run(conn: sqlite3.Connection, *, run_id: str, status: str, details: str) -> None:
+    if status not in {"provider-accepted", "failed"}:
+        raise ValueError("Unsupported startup email status.")
+    conn.execute("UPDATE startup_email_runs SET status=?,details=?,updated_at=? WHERE run_id=?",
+        (status, details, datetime.now(timezone.utc).isoformat(), run_id))
+    conn.commit()
+
+
+def get_startup_email_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM startup_email_runs WHERE run_id=?", (run_id,)).fetchone()
+    return dict(row) if row else None
