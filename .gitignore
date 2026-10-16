@@ -3,6 +3,15 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/cache/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
 data/
 datasets/
 active_fire_dataset/

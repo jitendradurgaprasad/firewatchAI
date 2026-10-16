@@ -1,0 +1,38 @@
+{
+  "source": "NASA FIRMS Academy official VIIRS SNPP sample CSV (includes NRT and URT records)",
+  "source_url": "https://firms.modaps.eosdis.nasa.gov/content/notebooks/sample_viirs_snpp_071223.csv",
+  "tutorial_url": "https://firms.modaps.eosdis.nasa.gov/content/academy/data_ingest/firms_data_ingest.html",
+  "retrieved_at": "2026-10-16T13:04:59.772054+00:00",
+  "acquisition_date_range_start": "2023-07-12T00:03:00+00:00",
+  "acquisition_date_range_end": "2023-07-12T19:50:00+00:00",
+  "total_source_records": 74605,
+  "source_columns": [
+    "latitude",
+    "longitude",
+    "bright_ti4",
+    "scan",
+    "track",
+    "acq_date",
+    "acq_time",
+    "satellite",
+    "instrument",
+    "confidence",
+    "version",
+    "bright_ti5",
+    "frp",
+    "daynight"
+  ],
+  "source_sha256": "edf79f62b35ba4485d7c85e01be5f6f61d30ab7b4addcf2eea00e2581982c30f",
+  "size_bytes": 6077404,
+  "version_counts": {
+    "2.0NRT": 69507,
+    "2.0URT": 5098
+  },
+  "confidence_counts": {
+    "n": 64901,
+    "h": 4912,
+    "l": 4792
+  },
+  "license_attribution": "NASA ESDIS states NASA-sponsored Earth science data are generally not copyrighted and NASA-led mission data are CC0 unless specifically restricted; NASA source acknowledgement is requested. Respect any source-specific restrictions and do not imply NASA endorsement. https://www.earthdata.nasa.gov/engage/open-data-services-software/data-use-policy",
+  "note": "Static historical example; not live observations. FIRMS detects thermal anomalies and does not confirm every point is a vegetation fire."
+}
