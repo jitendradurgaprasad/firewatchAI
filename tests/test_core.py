@@ -7,6 +7,7 @@ from firewatch.data import DatasetError, split_by_event, validate_manifest
 from firewatch.image_io import ImageInputError, load_rgb_image
 from firewatch.inference import predict
 from firewatch.metrics import classification_metrics
+from firewatch.model import build_model, load_checkpoint, save_checkpoint
 
 
 def make_rgb(path, color=(20, 30, 40)):
@@ -85,3 +86,33 @@ def test_invalid_image_abstains_and_metrics():
                                      ["ACTIVE_FIRE_EVIDENCE", "ACTIVE_FIRE_EVIDENCE"])
     assert metrics["accuracy"] == 0.5
     assert metrics["confusion_matrix"]["NO_VISIBLE_FIRE_EVIDENCE"]["ACTIVE_FIRE_EVIDENCE"] == 1
+
+
+def test_model_checkpoint_roundtrip(tmp_path):
+    checkpoint = tmp_path / "model.pt"
+    save_checkpoint(build_model(), checkpoint, epoch=1, seed=5)
+    model, metadata = load_checkpoint(checkpoint)
+    assert metadata["architecture"] == "resnet18"
+    assert metadata["epoch"] == 1
+    assert not model.training
+
+
+def test_confidence_threshold_abstains(tmp_path, monkeypatch):
+    import torch
+    import firewatch.inference as inference
+
+    class FixedModel:
+        def __call__(self, _tensor):
+            return torch.log(torch.tensor([[0.6, 0.4]]))
+
+    image = make_rgb(tmp_path / "image.png")
+    checkpoint = tmp_path / "exists.pt"
+    checkpoint.touch()
+    monkeypatch.setattr(inference, "load_checkpoint", lambda *_args, **_kwargs: (FixedModel(), {
+        "preprocessing": "RGB resize 224x224 bilinear; tensor scaled to [0,1], normalized with mean/std 0.5"
+    }))
+    result = predict(image, checkpoint, threshold=0.7)
+    assert result.outcome == "UNCERTAIN_OR_UNSUPPORTED"
+    assert result.confidence_score == pytest.approx(0.6)
+    accepted = predict(image, checkpoint, threshold=0.6)
+    assert accepted.outcome == "FIRE EVIDENCE DETECTED"

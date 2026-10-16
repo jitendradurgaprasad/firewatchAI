@@ -11,10 +11,10 @@
 ## Phase B — image and ML foundation (in progress)
 
 - Implemented strict JPEG/PNG image validation, manifest validation, content-hash duplicate detection, event-disjoint splitting, ResNet-18 training and checkpoint metadata, structured abstaining inference, metrics, CLI, tests, and initial documentation.
-- `py -3.11 -m pytest -q`: 7 passed. `git diff --check`: passed. No large files or credential-like strings were staged.
+- `py -3.11 -m pytest -q`: 9 passed, including checkpoint save/load and abstention-threshold behavior. `git diff --check`: passed. No large files or credential-like strings were staged.
 - Training/inference have not been run; no weights or actual labeled samples are available yet.
 - Files: `firewatch/`, `tests/`, `requirements.txt`, `pytest.ini`, `.gitignore`, `README.md`, `DEVELOPMENT_LOG.md`.
-- Commit: `fd2b8f7619dd8fb5132ff55a70a80e7b21d443a0` (`feat: add satellite fire classification foundation`). Push: verified on `origin/main` with `git ls-remote`; checkout clean at the gate.
+- Commits: `fd2b8f7619dd8fb5132ff55a70a80e7b21d443a0` (`feat: add satellite fire classification foundation`) and `96d0ff51ee489d808197fb067913bed0ff56c8d7` (verification log). Added checkpoint roundtrip and threshold tests in a follow-up commit; pending push.
 
 ## Phase C — active-fire dataset sample inspection (in progress)
 
