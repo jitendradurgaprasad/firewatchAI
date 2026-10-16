@@ -28,6 +28,10 @@ On the FSI [Forest Fire Point Search](https://fsiforestfire.gov.in/FirePointSear
 
 FSI defines forest-fire detections as MODIS/VIIRS thermal hotspots filtered by forest-area boundaries (Recorded Forest Area or Forest Cover Maps). FSI and FIRMS can share the same satellite hotspot, so a match adds forest-area context but is not independent confirmation. [FSI FAQ](https://fsiforestfire.gov.in/document/faq.pdf). Check the FSI portal's terms before redistributing its exports; FireWatch stores them locally.
 
+### View satellite imagery
+
+Open **Satellite Image Viewer**, choose a VIIRS true-color layer and imagery date, and the rendered NASA GIBS image refreshes every 10 seconds. The FIRMS MAP_KEY is not involved; GIBS serves the image separately. The viewer is read-only and does not pass image pixels to FireWatch scoring, imports, or alerts. A 10-second refresh only requests the selected date/layer again; it does not mean a new satellite capture is available.
+
 ### Optional recent FIRMS refresh
 
 The official [FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) requires a free MAP_KEY. Request one from [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/api/map_key/), then put it in a local `.env` file copied from `.env.example`:

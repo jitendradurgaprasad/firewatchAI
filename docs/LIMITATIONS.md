@@ -12,6 +12,7 @@
 - The live API requires a user-supplied NASA FIRMS MAP_KEY and internet access. Credentials, quotas, network, API availability, and upstream formats can fail. No background scheduler or automatic refresh exists.
 - No standalone/versioned forest-cover raster is bundled. Forest context requires an operator-downloaded FSI Fire Point Search CSV and covers only the included date/query range; unmatched records remain unknown. The FSI points are not a comprehensive land-cover mask. Jurisdiction remains unknown unless manually verified by the reviewer. OpenStreetMap base tiles provide context only and need internet access.
 - General notifications are simulated. Optional SMTP supports only explicitly synthetic demo test emails and blocks non-synthetic observations. There is no operational messaging, authentication/authorization, multi-user deployment, SLA, alert escalation, or emergency dispatch. SMTP relay acceptance does not prove inbox delivery.
+- The Satellite Image Viewer displays rendered GIBS true-color imagery only. It does not download full-resolution source granules, run image inference, extract hotspot fields, or connect the image to an observation. Re-fetching every 10 seconds may repeatedly display the same scene because upstream imagery publication is much slower.
 - SQLite is local, not a shared concurrent cloud database. Reviewer IDs and contact configurations are user supplied; the app does not authenticate reviewers.
 - The separate legacy image classifier is not integrated with this dashboard and is not trained by this workflow.
 

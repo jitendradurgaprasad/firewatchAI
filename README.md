@@ -38,6 +38,8 @@ Every parsed input row is retained as either a valid observation or a rejected r
 
 Use **Import Data** to add an uploaded CSV or local CSV path. Provide source, product if known, and licence/attribution details. These text fields record what was supplied; the app does not independently verify user-uploaded data rights or authenticity. Review validation counts, download rejection details, then use the map/table and observation details.
 
+**Satellite Image Viewer** fetches a rendered VIIRS true-color image for India from NASA GIBS and refreshes the display every 10 seconds. It is read-only: the image is not sent to FireWatch scoring, imports, or alert logic. The FIRMS MAP_KEY is not used for this; it retrieves processed fire-detection records, while the image comes from GIBS. A refresh may show the same acquisition because satellite coverage and processing do not follow the browser refresh interval.
+
 For an offline software walkthrough, use **Generate and load synthetic demo** on that page. It creates 800 deterministic FIRMS-shaped rows (320 generator-labeled forest-fire, 480 generator-labeled non-fire) across 40 simulated events, plus 480 simulated forest-context points. Files are written outside the repository to `%LOCALAPPDATA%\\FireWatchAI-data\\synthetic-demo` on Windows (or the user data home on other systems). A manifest records the fixed seed and counts. These are generated scenarios—not real observations, forest boundaries, independent truth, training evidence, or accuracy results.
 
 To add forest-area context, download a CSV from the [FSI Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search) and upload it in the same page's FSI section. The adapter stores FSI points in a separate local table and matches them to FIRMS records within 1 km and 12 hours. FSI points are satellite alerts selected using forest-area boundaries and may reuse the same MODIS/VIIRS detections; the match is not independent ground truth.
@@ -82,6 +84,7 @@ The app loads `.env` values with python-dotenv. Keep credentials and private ope
 
 - **Overview:** unique stored records, accepted/rejected source-row totals, review categories, feedback/notification totals, coverage and charts.
 - **Import Data / Data Validation:** CSV import, row accounting, missing-field counts, and rejection exports.
+- **Satellite Image Viewer:** read-only NASA GIBS VIIRS true-color imagery, refreshed for display every 10 seconds.
 - **Observation Map / Observation Table:** filtering, selectable observations, and spreadsheet-safe CSV exports.
 - **Priority Review Queue / Observation Details:** sorted queue, score factors, related observations, raw record, append-only review history, notification history, and individual Markdown investigation report.
 - **Spatial and Temporal Analysis:** filtered summaries of configured connected associations.

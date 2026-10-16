@@ -20,6 +20,8 @@ from firewatch.storage import (add_authority, add_notification, connect, latest_
                                save_forest_context_import, load_forest_context_points,
                                load_forest_context_rejections, save_import)
 from firewatch.synthetic_demo import generate_synthetic_forest_demo, write_synthetic_forest_demo
+from firewatch.satellite_imagery import GIBS_LAYERS, build_gibs_image_url, fetch_gibs_image
+from datetime import date
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.csv"
@@ -55,6 +57,17 @@ def test_synthetic_forest_demo_is_reproducible_valid_and_explicitly_labeled(tmp_
     files = write_synthetic_forest_demo(tmp_path)
     assert Path(files["observations_path"]).parent == tmp_path.resolve()
     assert Path(files["manifest_path"]).is_file()
+
+
+def test_satellite_image_url_is_gibs_only_and_date_bounded():
+    url = build_gibs_image_url(GIBS_LAYERS["Suomi-NPP VIIRS true color"], date(2026, 10, 15))
+    assert url.startswith("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?")
+    assert "REQUEST=GetMap" in url and "FORMAT=image%2Fjpeg" in url
+    assert "MAP_KEY" not in url and "FIRMS_MAP_KEY" not in url
+    with pytest.raises(ValueError, match="Unsupported"):
+        build_gibs_image_url("arbitrary-layer", date(2026, 10, 15))
+    with pytest.raises(ValueError, match="Only the configured"):
+        fetch_gibs_image("https://example.com/image.png")
 def test_ingestion_empty_and_unsupported_headers_fail_closed():
     with pytest.raises(IngestionError):
         ingest_firms_csv(b"")

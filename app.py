@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +37,7 @@ from firewatch.storage import (OUTCOMES, add_authority, add_notification, connec
                                save_evaluation, save_feedback, save_import,
                                save_forest_context_import, set_setting)
 from firewatch.synthetic_demo import generate_synthetic_forest_demo, write_synthetic_forest_demo
+from firewatch.satellite_imagery import GIBS_LAYERS, build_gibs_image_url, fetch_gibs_image
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -45,7 +46,21 @@ SAMPLE_PATH = APP_ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.csv"
 SAMPLE_META_PATH = APP_ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.json"
 NAV_ITEMS = ["Overview", "Import Data", "Observation Map", "Observation Table",
              "Priority Review Queue", "Observation Details", "Feedback and Review History",
-             "Spatial and Temporal Analysis", "Notification Centre", "Data Validation", "Evaluation", "Settings and About"]
+             "Spatial and Temporal Analysis", "Satellite Image Viewer", "Notification Centre",
+             "Data Validation", "Evaluation", "Settings and About"]
+
+
+@st.fragment(run_every=10)
+def _live_satellite_image(layer_name: str, image_date: date) -> None:
+    """Refresh only a rendered GIBS image every ten seconds; perform no analysis."""
+    layer = GIBS_LAYERS[layer_name]
+    try:
+        image, mime = fetch_gibs_image(build_gibs_image_url(layer, image_date))
+        st.image(image, caption=f"NASA GIBS rendered {layer_name} image · imagery date {image_date.isoformat()} · {mime}",
+                 width="stretch")
+        st.caption(f"Image request refreshed at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    except (RuntimeError, ValueError) as exc:
+        st.error(str(exc))
 
 
 def bootstrap_sample(conn) -> None:
@@ -393,7 +408,21 @@ def main() -> None:
     if not scored.empty and scored.get("source_name", pd.Series(dtype=str)).astype(str).str.contains("SYNTHETIC", case=False).any():
         st.warning("Synthetic records are loaded. Their generator-defined labels and simulated locations are for software demonstration only; they do not represent real observations or establish real-world accuracy.")
 
-    if page == "Overview":
+    if page == "Satellite Image Viewer":
+        st.write("A read-only satellite imagery viewer. It displays NASA GIBS rendered VIIRS imagery and does not run FireWatch ranking, import records, or generate alerts.")
+        st.warning("The FIRMS MAP_KEY is not used here: that key retrieves FIRMS fire-detection records/map services, not imagery. This tab uses NASA GIBS imagery separately and requires no FIRMS key.")
+        st.caption("The image display refreshes every 10 seconds. The selected satellite image itself usually updates only when NASA publishes another processed scene; many GIBS near-real-time products appear a few hours after observation. Repeated refreshes can show the same image and do not mean a new satellite capture arrived.")
+        col_layer, col_date = st.columns(2)
+        today_utc = datetime.now(timezone.utc).date()
+        with col_layer:
+            layer_name = st.selectbox("Satellite imagery layer", list(GIBS_LAYERS))
+        with col_date:
+            image_date = st.date_input("Imagery date (UTC)", value=today_utc - timedelta(days=1),
+                                       max_value=today_utc)
+        st.caption("Regional view: India and surrounding South Asia · rendered corrected-reflectance true color. Imagery is visual context only; the viewer does not interpret it as a fire or use it for model predictions.")
+        _live_satellite_image(layer_name, image_date)
+
+    elif page == "Overview":
         if scored.empty:
             st.info("No observations are loaded. Import a CSV or enable the bundled sample.")
             return

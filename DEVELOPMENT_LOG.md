@@ -105,3 +105,9 @@
 - Added an opt-in SMTP email provider restricted in code to records carrying synthetic provenance. The message subject and body clearly state `SYNTHETIC TEST` and explicitly say the alert is not real. The Notification Centre blocks email for non-synthetic observations and audits each configured recipient independently.
 - Added the user's two test destinations to the ignored local `.env`; no recipient addresses or SMTP credentials are committed. No SMTP host, sender, username, or password is configured, so no email was sent. The local simulation remains usable and is the default.
 - SMTP handling is verified with a mocked transport, including the synthetic-only guard and message warning. Relay acceptance will be reported as provider-accepted, never as confirmed inbox delivery.
+
+## Phase K — NASA GIBS satellite image viewer (2026-10-16)
+
+- Added a separate read-only **Satellite Image Viewer** tab. It requests regional rendered VIIRS true-color imagery from NASA GIBS WMS and refreshes the displayed image every 10 seconds. The date, satellite layer, and request time are visible.
+- Clarified in the UI and docs that the existing FIRMS MAP_KEY is for FIRMS fire-detection records/map services, not the imagery viewer. The image viewer uses GIBS separately and does not ingest pixels, calculate fire scores, or emit alerts.
+- Verified a live GIBS image request for 2026-10-15 returned a valid 246,318-byte JPEG. The ten-second refresh re-requests the selected image; it can show the same scene until NASA publishes an updated visualization.
