@@ -485,7 +485,7 @@ def main() -> None:
         page = st.radio("Navigation", NAV_ITEMS, label_visibility="collapsed")
         st.divider()
         st.metric("Stored observations", int(conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]))
-        st.caption("ERS email: session status only; anomalies remain unconfirmed")
+        st.caption("ERS email: one-click manual anomaly review")
 
     imports = list_imports(conn)
     token = _imports_token(conn)
@@ -868,10 +868,8 @@ def main() -> None:
                     st.info("Email is enabled only for NASA FIRMS Area API observations acquired within the last six days. Historical sample, uploaded, and synthetic rows cannot be emailed through this route.")
                 if not ers_email:
                     st.info("Set FIREWATCH_ERS_EMAIL in the private local .env file and restart FireWatch.")
-                manual_review_ack = st.checkbox(
-                    "I understand this is an unconfirmed anomaly review request; the authority decides whether to act.",
-                    key="ers_manual_review_ack")
-                send_ers_enabled = bool(ers_email and eligible_live_record and manual_review_ack)
+                st.caption("One click sends this selected, recent FIRMS anomaly to ERS support for human review. It does not confirm a fire or dispatch responders.")
+                send_ers_enabled = bool(ers_email and eligible_live_record)
                 if st.button("Email this anomaly to ERS support", type="primary", key="send_ers_formsubmit",
                              disabled=not send_ers_enabled):
                     email_payload = build_notification_payload(observation,
