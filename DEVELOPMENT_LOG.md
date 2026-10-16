@@ -117,3 +117,4 @@
 - Made **Live Monitoring** the opening tab and added one bounded India FIRMS NRT query per minute while the page is open. Valid detections and coordinates are displayed with a decorative animated radar sweep. Live API results are not silently persisted or replaced with synthetic data if unavailable.
 - Added a separate 10-second GIBS image refresh on the home screen and kept the full image viewer and all project functions in the same navigation menu. FIRMS detections and GIBS imagery remain distinct; the app does not infer hotspots from image pixels.
 - Added `Start_FireWatch.bat` at the repository root to launch the Streamlit interface with a project or configured local Python environment.
+- Added `Install_FireWatch.bat` beside the launcher to check Python 3.11, create `.venv`, upgrade pip, install the complete `requirements.txt`, and report errors without changing private `.env` settings.

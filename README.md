@@ -12,6 +12,8 @@ Python 3.11 is recommended. From the repository root:
 
 On Windows, double-click `Start_FireWatch.bat` in the repository root to launch the interface. It uses the project `.venv` if present, then the configured local FireWatch environment, and finally Python 3.11 on PATH.
 
+For a new Windows setup, first double-click `Install_FireWatch.bat` in the same folder. It checks for Python 3.11, creates `.venv`, upgrades pip, and installs all packages from `requirements.txt`. After it completes, double-click `Start_FireWatch.bat`.
+
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
