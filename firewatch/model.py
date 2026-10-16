@@ -10,8 +10,8 @@ from torchvision import models, transforms
 
 from .data import LABELS
 
-IMAGE_SIZE = 224
-PREPROCESSING = "RGB resize 224x224 bilinear; tensor scaled to [0,1], normalized with mean/std 0.5"
+IMAGE_SIZE = 384
+PREPROCESSING = "RGB resize 384x384 bilinear; tensor scaled to [0,1], normalized with mean/std 0.5"
 PREPROCESS = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE), interpolation=transforms.InterpolationMode.BILINEAR),
     transforms.ToTensor(),
@@ -61,8 +61,12 @@ def load_checkpoint(path: str | Path, *, device: str = "cpu") -> tuple[nn.Module
 
 
 def train_model(train_rows: list[dict[str, str]], validation_rows: list[dict[str, str]],
-                checkpoint: str | Path, *, epochs: int = 5, batch_size: int = 16,
+                checkpoint: str | Path, *, epochs: int = 5, batch_size: int = 4,
                 learning_rate: float = 1e-3, seed: int = 42, device: str | None = None) -> nn.Module:
+    for split_name, rows in (("train", train_rows), ("validation", validation_rows)):
+        labels = {row.get("label") for row in rows}
+        if labels != set(LABEL_ORDER):
+            raise ValueError(f"{split_name} data must contain both validated classes; found {sorted(labels)}.")
     if epochs < 1 or batch_size < 1 or learning_rate <= 0:
         raise ValueError("epochs, batch_size, and learning_rate must be positive.")
     torch.manual_seed(seed)

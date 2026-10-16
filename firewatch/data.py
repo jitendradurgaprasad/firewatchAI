@@ -8,6 +8,7 @@ from pathlib import Path
 
 LABELS = {"ACTIVE_FIRE_EVIDENCE", "NO_VISIBLE_FIRE_EVIDENCE"}
 REQUIRED_COLUMNS = {"image", "label", "event_id"}
+ALLOWED_SPLITS = {"train", "validation", "test"}
 
 
 class DatasetError(ValueError):
@@ -39,7 +40,12 @@ def validate_manifest(csv_path: str | Path, *, check_duplicates: bool = True) ->
                 if digest in seen_hashes:
                     raise DatasetError(f"Duplicate image on line {line_number}: {image_value} duplicates {seen_hashes[digest]}.")
                 seen_hashes[digest] = image_value
-            rows.append({"image": str(image_path), "label": label, "event_id": event_id})
+            row = {key: (value or "").strip() for key, value in raw.items() if key}
+            row.update({"image": str(image_path), "label": label, "event_id": event_id})
+            if "split" in row:
+                if row["split"] not in ALLOWED_SPLITS:
+                    raise DatasetError(f"Invalid split on line {line_number}: {row['split']!r}.")
+            rows.append(row)
     if not rows:
         raise DatasetError("Manifest contains no samples.")
     return rows
@@ -53,6 +59,16 @@ def class_counts(rows: list[dict[str, str]]) -> dict[str, int]:
 def split_by_event(rows: list[dict[str, str]], *, seed: int = 42,
                    train: float = 0.7, validation: float = 0.15) -> dict[str, list[dict[str, str]]]:
     """Deterministically split by event to prevent event/chip leakage."""
+    if any("split" in row for row in rows):
+        if not all(row.get("split") in ALLOWED_SPLITS for row in rows):
+            raise DatasetError("When provided, every row must have a valid train/validation/test split.")
+        event_splits: dict[str, set[str]] = {}
+        for row in rows:
+            event_splits.setdefault(row["event_id"], set()).add(row["split"])
+        mixed = [event for event, values in event_splits.items() if len(values) != 1]
+        if mixed:
+            raise DatasetError(f"Events appear in multiple splits: {', '.join(sorted(mixed))}.")
+        return {name: [row for row in rows if row["split"] == name] for name in sorted(ALLOWED_SPLITS)}
     if not 0 < train < 1 or not 0 < validation < 1 or train + validation >= 1:
         raise ValueError("train and validation fractions must be positive and sum to less than 1.")
     groups: dict[str, list[dict[str, str]]] = {}

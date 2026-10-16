@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 from .image_io import ImageInputError, load_rgb_image
-from .model import LABEL_ORDER, PREPROCESS, load_checkpoint
+from .model import LABEL_ORDER, PREPROCESS, PREPROCESSING, load_checkpoint
 
 MODEL_ID = "firewatch-resnet18"
 MODEL_VERSION = "0.1.0"
@@ -47,7 +47,7 @@ def predict(image_path: str | Path, checkpoint: str | Path, *, threshold: float 
                           MODEL_VERSION, "valid", "Prediction unavailable: trained model weights are missing.", LIMITATIONS)
     try:
         model, meta = load_checkpoint(checkpoint, device=device)
-        if meta.get("preprocessing") != "RGB resize 224x224 bilinear; tensor scaled to [0,1], normalized with mean/std 0.5":
+        if meta.get("preprocessing") != PREPROCESSING:
             raise ValueError("Checkpoint preprocessing metadata is unsupported.")
         tensor = PREPROCESS(loaded.image).unsqueeze(0).to(device)
         with torch.no_grad():

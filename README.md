@@ -33,7 +33,15 @@ PyTorch installation may need a platform-specific wheel; use the official [PyTor
 
 ## Local use
 
-Check an image manifest (CSV columns: `image,label,event_id`; image paths relative to the CSV):
+Prepare the approved California archive after extracting it locally. This validates each RGB image/mask pair, checks `fire_px` and `nodata_pct` against actual masks, verifies all fire/count partitions, and skips masks with no valid pixels (and chips above the configurable 50% no-data limit):
+
+```powershell
+python -m firewatch.cli prepare-california "$env:LOCALAPPDATA\firewatchAI-data\dataset\California_S2_Active_Fire_Dataset_v1.0"
+```
+
+The command writes a weak positive candidate manifest (`image,label,event_id,split,fire_px,nodata_pct,label_source`) and a separate review queue. `ACTIVE_FIRE_EVIDENCE` means the automatic HOTMAP mask has at least one value-1 pixel. Chips with no value-1 pixels are marked `UNCERTAIN_OR_UNSUPPORTED` in the review queue, not used as binary negatives: the masks have no cloud class, and valid background can include cloud-obscured pixels. The adapter therefore reports `training_ready: false`. Mask value 255 is ignored as no-data. The dataset's official fire-held-out splits are preserved. The included 233 analyst brush-mask PNGs are not treated as a complete classification test set because the archive lacks the accompanying JSON that identifies reviewed empty and uncertain chips. Training requires an appropriately reviewed negative class; until then, the generic training pipeline is implemented but no model can honestly be trained from this dataset alone.
+
+Check an image manifest (CSV columns: `image,label,event_id`; optional `split` must be `train`, `validation`, or `test`; image paths may be absolute or relative to the CSV):
 
 ```powershell
 python -m firewatch.cli inspect path\to\manifest.csv
@@ -41,10 +49,10 @@ python -m firewatch.cli inspect path\to\manifest.csv
 
 Labels must be `ACTIVE_FIRE_EVIDENCE` or `NO_VISIBLE_FIRE_EVIDENCE`, and each row must name an event. The validator rejects missing files, invalid labels, and byte-identical duplicate files. `UNCERTAIN_OR_UNSUPPORTED` is an inference outcome, not a trainable label in this two-class pipeline. Label provenance must be established by the dataset provider; do not create labels from event association, hotspot proximity, burn scars, or absence of a satellite detection.
 
-Train uses deterministic event-disjoint train/validation/test splits (70/15/15 by event, seed 42 by default), selects the checkpoint on validation loss, and reports metrics once on the test partition:
+Training refuses to start unless both classes are present in train and validation sets. With a reviewed manifest, it uses included event splits when present; otherwise it creates deterministic event-disjoint train/validation/test splits (70/15/15 by event, seed 42 by default). The ResNet-18 input is resized to 384×384 to retain more of the dataset's small fire signatures than a 224-pixel input. Validation loss selects the checkpoint, and metrics are then calculated on the held-out test partition. Metrics reflect only the provenance and quality of the supplied labels.
 
 ```powershell
-python -m firewatch.cli train path\to\manifest.csv --epochs 5 --batch-size 16
+python -m firewatch.cli train path\to\manifest.csv --epochs 5 --batch-size 4
 ```
 
 Evaluate a saved checkpoint on the manifest's deterministic test split:
@@ -71,9 +79,9 @@ python -m pytest
 
 ## Implementation status
 
-Implemented: strict image loading, manifest and label checks, duplicate detection, event-aware splits, ResNet-18 training/checkpoint loading, basic classification metrics, structured abstaining inference, CLI, and unit tests.
+Implemented: strict image loading, manifest and label checks, duplicate detection, California mask validation and weak-positive extraction, a separate uncertain review queue for mask-zero chips, preservation/validation of official fire partitions, ResNet-18 training/checkpoint loading with a two-class data guard, basic classification metrics, structured abstaining inference, CLI, and unit tests.
 
-Not yet implemented: dataset-specific mask-to-image-label preparation, trained checkpoint, measured model evaluation, GUI, deployment, and any other FireWatch feature. The dataset was downloaded only after explicit approval, verified, and sample-inspected outside Git. Training should wait until the adapter preserves the official fire-level partitions, handles no-data pixels, and records that chip labels are weakly derived from a mask.
+Not yet implemented: reviewed negative labels, trained checkpoint, measured model evaluation, GUI, deployment, and any other FireWatch feature. The approved dataset archive, extraction, generated manifests, and inspected samples remain in local AppData outside Git. A training job has not been launched because the available labels cannot safely support the negative class.
 
 ## Development log
 

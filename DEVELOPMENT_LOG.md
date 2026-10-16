@@ -23,4 +23,14 @@
 - Inspected sample images and masks. RGB composites are fixed-stretch B12/B11/B8A; masks use values 0 background, 1 active fire, 255 nodata. Sample masks agree with `fire_px` counts. Positive flame regions can be extremely small (sample with 9 active pixels), so the baseline 224×224 resize needs reconsideration.
 - Archive license states CC BY 4.0; imagery remains subject to Copernicus Sentinel terms and perimeters to NIFC/USGS open-data terms. Dataset source/attribution is documented in README.
 - The 233 analyst-review PNGs are only brush masks. The upstream protocol says the Label Studio JSON is needed to identify reviewed empty chips and uncertain annotations; that JSON is not in the data archive. Therefore the review subset cannot yet be treated as a complete independent chip-classification test set. No model metric was fabricated.
-- Files changed: `README.md`, `DEVELOPMENT_LOG.md`. Tests: documentation/data inspection only; no code tests needed. Commit/push: pending.
+- Files changed: `README.md`, `DEVELOPMENT_LOG.md`. Tests: documentation/data inspection only; no code tests needed. Commit: `ca9081b4b9557243009e33e88f41f272db960ea0`. Initial push briefly failed on a DNS lookup error; retry succeeded and `git ls-remote` verified the commit on `origin/main`.
+
+## Phase D — dataset adapter and official splits (complete)
+
+- Added `firewatch/california_dataset.py` to validate the source's RGB images and masks, check mask codes and metadata counts, exclude no-data, retain only weak mask-positive candidates, and keep the supplied fire partitions. Chips with no HOTMAP-positive pixels go into a separate `UNCERTAIN_OR_UNSUPPORTED` review queue because masks have no cloud class. Added CLI `prepare-california` and support for manifests with preassigned event-level splits.
+- Resized classifier input from 224 to 384 pixels because reviewed samples include tiny fire signatures; CPU batch default is 4. Training now refuses to proceed unless both classes are present in train and validation.
+- Full final pass: all 2,148 image/mask pairs and per-fire chip/fire-chip/fire-pixel totals matched. No chips exceeded the no-data limit. Adapter output: 841 weak positive candidates and 1,307 uncertain mask-zero chips; official train/validation/test split preserved at 548/137/156 positives and 922/109/276 uncertain. Manifest validation and duplicate scan passed; it contains no validated negative class.
+- Training is intentionally blocked by the two-class data guard. The 1,307 mask-zero chips are not negative-labeled because the mask has no cloud class; they require cloud-aware/manual review or another suitable labeled source. No model checkpoint or evaluation metric was produced.
+- Added adapter/split and single-class training-guard tests. `py -3.11 -m pytest -q`: 13 passed; `git diff --check`: passed. Local manifest check: 841 rows, one class, event split sizes 548/137/156, train-ready false.
+- Files: `firewatch/california_dataset.py`, `firewatch/data.py`, `firewatch/cli.py`, `firewatch/model.py`, `tests/test_core.py`, `README.md`, `DEVELOPMENT_LOG.md`.
+- Commit/push: pending.

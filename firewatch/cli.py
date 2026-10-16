@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 
+from .california_dataset import prepare_california_manifest
 from .data import class_counts, split_by_event, validate_manifest
 from .image_io import load_rgb_image
 from .inference import predict
@@ -30,11 +31,15 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect", help="validate an image/label/event manifest")
     inspect.add_argument("manifest")
+    prepare = commands.add_parser("prepare-california", help="validate and prepare the California Sentinel-2 mask dataset")
+    prepare.add_argument("dataset_root")
+    prepare.add_argument("--output")
+    prepare.add_argument("--max-nodata-percent", type=float, default=50.0)
     train = commands.add_parser("train", help="train a small ResNet-18 using event-disjoint splits")
     train.add_argument("manifest")
     train.add_argument("--checkpoint", default="artifacts/firewatch-resnet18.pt")
     train.add_argument("--epochs", type=int, default=5)
-    train.add_argument("--batch-size", type=int, default=16)
+    train.add_argument("--batch-size", type=int, default=4)
     train.add_argument("--seed", type=int, default=42)
     evaluate = commands.add_parser("evaluate", help="evaluate a checkpoint on a held-out event split")
     evaluate.add_argument("manifest")
@@ -47,8 +52,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "inspect":
         rows = validate_manifest(args.manifest)
-        print(json.dumps({"samples": len(rows), "class_counts": class_counts(rows),
-                          "events": len({row['event_id'] for row in rows})}, indent=2))
+        report = {"samples": len(rows), "class_counts": class_counts(rows),
+                  "events": len({row['event_id'] for row in rows})}
+        if any("split" in row for row in rows):
+            parts = split_by_event(rows)
+            report["split_counts"] = {name: class_counts(part) for name, part in parts.items()}
+        print(json.dumps(report, indent=2))
+    elif args.command == "prepare-california":
+        print(json.dumps(prepare_california_manifest(args.dataset_root, args.output,
+                                                     max_nodata_percent=args.max_nodata_percent), indent=2))
     elif args.command == "train":
         rows = validate_manifest(args.manifest)
         partitions = split_by_event(rows, seed=args.seed)
