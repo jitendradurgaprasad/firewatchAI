@@ -38,7 +38,7 @@ A direct module benchmark on the first 10,000 sample rows completed in 12.48 sec
 
 SQLite tests verified append-only feedback, latest-review status derivation, internal-queue fallback for unknown jurisdiction, additive migration preserving an existing feedback row, and provenance links when the same observation is imported from multiple sources.
 
-Notification tests verified payload disclaimers, simulation status, deduplication, persisted `duplicate_suppressed` audit event/count, and retry status history. No email, SMS, webhook or authority message was sent. A live NASA API key was not configured; API response handling was tested using a mocked response.
+Notification tests verified payload disclaimers, simulation status, deduplication, persisted `duplicate_suppressed` audit event/count, and retry status history. No email, SMS, webhook or authority message was sent in that run. A live NASA API key was not configured; API response handling was tested using a mocked response.
 
 ## K. Exports
 

@@ -54,7 +54,7 @@ Use **Record a human review** to append an outcome and optional assessment, conf
 
 ## 5. Simulated notifications
 
-In **Notification Centre**, select an observation and provide a trigger purpose. Unknown jurisdiction routes to the internal review queue. The app creates a deduplicated payload and records local simulation status; no email, webhook, SMS, or authority message is sent. Repeat attempts with the same observation and purpose are suppressed and added to notification audit history.
+In **Notification Centre**, select an observation and provide a trigger purpose. Unknown jurisdiction routes to the internal review queue. The default action records a local simulation. For hackathon testing only, SMTP email is enabled when private `.env` includes `FIREWATCH_TEST_RECIPIENTS` (comma-separated), `FIREWATCH_SMTP_HOST`, `FIREWATCH_SMTP_PORT` (587), `FIREWATCH_SMTP_USERNAME`, `FIREWATCH_SMTP_PASSWORD`, and `FIREWATCH_SMTP_FROM`. The email button is enabled only for generated synthetic observations and each message is labeled as synthetic, not a real alert. SMTP acceptance does not confirm inbox delivery. Repeat attempts per observation/recipient are suppressed and audited. Do not use this route for real incidents or emergency authorities.
 
 ## 6. Configure and export
 

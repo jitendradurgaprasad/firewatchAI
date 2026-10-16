@@ -99,3 +99,9 @@
 - Added a deterministic, seeded offline scenario generator with 800 FIRMS-shaped rows, 40 event IDs, 320 generated forest-fire labels, 480 generated non-fire labels (including false forest alerts, industrial heat, and agricultural burns), and 480 correlated context points. Every row/context source is visibly marked synthetic; generated coordinates do not come from forest boundaries.
 - Added a one-click Import Data workflow with idempotent import IDs and explicit warning. CSVs and manifest are written under local app data outside the Git repository. Synthetic context sources now remain visible in match explanations.
 - Integrity check: observation parser accepted 800/800 rows; context parser accepted 480/480. This is a software demo only; there is still no independently labeled real-world evaluation set, and training/deployment accuracy is unverified.
+
+## Phase J — synthetic test email routing (2026-10-16)
+
+- Added an opt-in SMTP email provider restricted in code to records carrying synthetic provenance. The message subject and body clearly state `SYNTHETIC TEST` and explicitly say the alert is not real. The Notification Centre blocks email for non-synthetic observations and audits each configured recipient independently.
+- Added the user's two test destinations to the ignored local `.env`; no recipient addresses or SMTP credentials are committed. No SMTP host, sender, username, or password is configured, so no email was sent. The local simulation remains usable and is the default.
+- SMTP handling is verified with a mocked transport, including the synthetic-only guard and message warning. Relay acceptance will be reported as provider-accepted, never as confirmed inbox delivery.

@@ -1,4 +1,4 @@
-"""FireWatch FIRMS observation review dashboard (simulation-only notifications)."""
+"""FireWatch FIRMS observation triage dashboard with synthetic-only test email."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from firewatch.firms_api import FirmsAPIError, PRODUCTS, fetch_recent_area
 from firewatch.firms_ingest import IngestionError, MAX_CSV_BYTES, ingest_firms_csv
 from firewatch.map_view import create_observation_map, nearest_observation
 from firewatch.notifications import (SimulatedNotificationProvider, build_notification_payload,
+                                     SMTPTestNotificationProvider,
                                      dispatch_notification,
                                      notification_dedupe_key)
 from firewatch.ranking import CORE_WEIGHTS, DEFAULT_WEIGHTS, score_observations
@@ -672,9 +673,9 @@ def main() -> None:
                 _review_form(conn, observation, authorities)
 
     elif page == "Notification Centre":
-        st.warning("Simulation only. No email, webhook, SMS, or authority contact is sent by this application.")
+        st.warning("Synthetic email test only: outgoing email is allowed only for records from the generated synthetic demo. Every email is prominently labeled as synthetic; no real fire observations should be emailed as alerts.")
         if not scored.empty:
-            st.subheader("Queue an observation for simulated review")
+            st.subheader("Queue an observation for review")
             observation = _selected_observation(scored, key="notification_observation_id")
             if observation:
                 reason = st.text_input("Trigger reason", value="Human reviewer requested follow-up")
@@ -696,6 +697,46 @@ def main() -> None:
                                                          SimulatedNotificationProvider())
                         st.success(f"Notification {notification_id} recorded with status `{response['status']}`; no message was sent.")
                         st.rerun()
+                st.divider()
+                st.subheader("Send synthetic hackathon test email")
+                test_recipients = [value.strip() for value in os.environ.get("FIREWATCH_TEST_RECIPIENTS", "").split(",") if value.strip()]
+                smtp_config = {key: os.environ.get(key, "") for key in (
+                    "FIREWATCH_SMTP_HOST", "FIREWATCH_SMTP_USERNAME", "FIREWATCH_SMTP_PASSWORD", "FIREWATCH_SMTP_FROM")}
+                smtp_port = int(os.environ.get("FIREWATCH_SMTP_PORT", "587"))
+                synthetic_only = "SYNTHETIC" in str(observation.get("source_name") or "").upper()
+                st.caption("Recipients: " + (", ".join(test_recipients) if test_recipients else "not configured"))
+                if not synthetic_only:
+                    st.info("Select a row from the generated synthetic demo to enable email. Real observation rows are blocked from this test sender.")
+                if not all(smtp_config.values()):
+                    st.info("SMTP is not configured. Add FIREWATCH_SMTP_HOST, FIREWATCH_SMTP_USERNAME, FIREWATCH_SMTP_PASSWORD, FIREWATCH_SMTP_FROM and FIREWATCH_SMTP_PORT to the private local .env file to enable delivery. Simulation still works without SMTP.")
+                send_enabled = synthetic_only and bool(test_recipients) and all(smtp_config.values())
+                if st.button("Send synthetic test alert email", disabled=not send_enabled, type="primary", key="send_synthetic_email"):
+                    provider = SMTPTestNotificationProvider(host=smtp_config["FIREWATCH_SMTP_HOST"], port=smtp_port,
+                        username=smtp_config["FIREWATCH_SMTP_USERNAME"], password=smtp_config["FIREWATCH_SMTP_PASSWORD"],
+                        from_address=smtp_config["FIREWATCH_SMTP_FROM"])
+                    delivery_results = []
+                    for email_address in test_recipients:
+                        email_payload = build_notification_payload(observation,
+                            trigger_reason="synthetic_hackathon_test_email", routing_reason="User-configured test recipient",
+                            recipient=email_address)
+                        email_payload["test_only"] = True
+                        email_payload["synthetic_data"] = True
+                        email_payload["synthetic_scenario"] = "generated forest-fire workflow demo"
+                        email_payload["verification_notice"] = "SYNTHETIC HACKATHON TEST ONLY — not a real fire alert."
+                        email_id = email_payload["alert_id"]
+                        email_dedupe = notification_dedupe_key(str(observation["observation_id"]),
+                            "synthetic_hackathon_test_email", email_address)
+                        created = add_notification(conn, notification_id=email_id,
+                            observation_id=str(observation["observation_id"]), recipient=email_address,
+                            channel="smtp-test", trigger_reason="synthetic_hackathon_test_email",
+                            dedupe_key=email_dedupe, payload=email_payload)
+                        if created:
+                            delivery_results.append((email_address, dispatch_notification(conn, email_id, provider)))
+                        else:
+                            delivery_results.append((email_address, {"status": "duplicate_suppressed", "response": "Already attempted for this record and recipient."}))
+                    for address, delivery in delivery_results:
+                        st.info(f"{address}: {delivery['status']} — {delivery['response']}")
+                    st.rerun()
         notifications = load_notifications(conn)
         st.subheader("Notification audit log")
         if notifications.empty:
@@ -892,7 +933,7 @@ def main() -> None:
 
 **Jurisdiction.** FIRMS CSVs do not reliably provide administrative boundaries. The dashboard displays “Jurisdiction unknown — manual review required” unless a reviewer explicitly verifies a configured jurisdiction. Unknown routes to the internal simulation queue.
 
-**Delivery.** Simulated notification records only. There is no real email, webhook, SMS, or emergency-authority delivery integration.
+**Delivery.** Default notifications are simulated. An optional SMTP path sends only conspicuously labeled synthetic hackathon test emails and blocks non-synthetic records. No webhook, SMS, or emergency-authority integration is provided.
 
 **NASA sample attribution.** NASA FIRMS Academy VIIRS SNPP sample, 2023-07-12; see `sample_data/nasa_firms_viirs_snpp_071223.json`. NASA ESDIS generally provides NASA-sponsored Earth science data as open data/CC0 unless a specific restriction applies; acknowledge NASA and do not imply NASA endorsement. FIRMS thermal anomalies are not confirmed wildfires.
 """)

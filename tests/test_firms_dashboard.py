@@ -12,7 +12,8 @@ from firewatch.firms_ingest import IngestionError, ingest_firms_csv
 from firewatch.forest_context import ForestContextError, match_forest_context, parse_fsi_points
 from firewatch.map_view import create_observation_map, map_ready_observations, nearest_observation
 from firewatch.notifications import (SimulatedNotificationProvider, build_notification_payload,
-                                     dispatch_notification, notification_dedupe_key)
+                                     SMTPTestNotificationProvider, dispatch_notification,
+                                     notification_dedupe_key)
 from firewatch.ranking import score_observations
 from firewatch.storage import (add_authority, add_notification, connect, latest_feedback,
                                initialize, load_feedback, load_observation_sources, load_observations, resolve_recipient, save_feedback,
@@ -254,6 +255,31 @@ def test_notification_retries_are_audited(tmp_path):
     conn.close()
 
 
+def test_smtp_test_provider_only_sends_labeled_synthetic_alerts(monkeypatch):
+    seen = {}
+
+    class SMTP:
+        def __init__(self, host, port, timeout):
+            seen["connection"] = (host, port, timeout)
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def ehlo(self): pass
+        def starttls(self): pass
+        def login(self, username, password): seen["auth"] = (username, password)
+        def send_message(self, message): seen["message"] = message; return {}
+
+    monkeypatch.setattr("firewatch.notifications.smtplib.SMTP", SMTP)
+    provider = SMTPTestNotificationProvider(host="smtp.test", port=587, username="u", password="p",
+                                           from_address="sender@example.test")
+    with pytest.raises(ValueError, match="synthetic test alerts only"):
+        provider.deliver({"test_only": False}, "person@example.test")
+    result = provider.deliver({"test_only": True, "synthetic_data": True,
+        "observation_id": "demo-1", "latitude": 1, "longitude": 2,
+        "synthetic_scenario": "generated forest-fire workflow demo"}, "person@example.test")
+    assert result["status"] == "provider-accepted"
+    assert seen["message"]["To"] == "person@example.test"
+    assert "SYNTHETIC DATA ONLY" in seen["message"].get_content()
+    assert "not a real fire alert" in seen["message"].get_content()
 def test_csv_formula_injection_and_functional_evaluation(tmp_path):
     data = safe_csv_bytes(pd.DataFrame({"text":["=1+1", " normal"], "value":[-3, 2]})).decode("utf-8-sig")
     assert "'=1+1" in data and ", -3" not in data

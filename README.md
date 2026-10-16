@@ -58,7 +58,7 @@ Spatial/time association connects observations when both great-circle distance a
 
 Reviewer feedback is append-only and includes outcome, assessment, optional confidence/notes/reviewer ID, and manually verified jurisdiction. Feedback is not treated as independent ground truth, and the ranking does not learn from it. Jurisdiction fields in source data are not considered verified. Active routing entries require the operator to mark the contact verified and supply a verification date; unmatched observations route to an internal review queue.
 
-Notification creation uses an observation/trigger deduplication key and records a payload, routing reason, event history, and status. The only provider implemented and selectable by the dashboard is local simulation. No email, webhook, SMS, or authority communication is sent. Provider acceptance and delivery statuses are kept distinct in the general audit function; a simulated record is never represented as externally delivered.
+Notification creation uses observation/trigger/recipient deduplication and records a payload, routing reason, event history, and status. The default remains local simulation. For the hackathon's generated demo only, the Notification Centre can send an explicitly labeled synthetic test email through configured SMTP. It blocks non-synthetic records and the message states the locations are generated and not a real alert. Configure recipients and SMTP in private `.env` using `FIREWATCH_TEST_RECIPIENTS`, `FIREWATCH_SMTP_HOST`, `FIREWATCH_SMTP_PORT`, `FIREWATCH_SMTP_USERNAME`, `FIREWATCH_SMTP_PASSWORD`, and `FIREWATCH_SMTP_FROM`. SMTP relay acceptance is not proof of inbox delivery. Never configure emergency authorities for this test.
 
 ## Data storage and configuration
 
@@ -73,7 +73,7 @@ Set these optional environment variables before starting Streamlit:
 - `FIREWATCH_DB_PATH`: explicit SQLite path (takes precedence).
 - `FIREWATCH_AUTOLOAD_SAMPLE`: `0`/`false` disables the bundled sample import; default is enabled.
 - `FIREWATCH_REVIEWER_ID`: pre-fills and locks the reviewer identifier field.
-- `FIREWATCH_DELIVERY_MODE`: retained for configuration clarity; the app remains simulation-only regardless of value.
+- `FIREWATCH_DELIVERY_MODE`: retained for configuration clarity; ordinary notifications remain simulation-only.
 - `FIRMS_MAP_KEY`: optional NASA FIRMS API key. Keep it in a private local `.env` or process environment; never commit it.
 
 The app loads `.env` values with python-dotenv. Keep credentials and private operational data outside Git. The API key is only used for an explicit user-triggered Area API query.
@@ -86,7 +86,7 @@ The app loads `.env` values with python-dotenv. Keep credentials and private ope
 - **Priority Review Queue / Observation Details:** sorted queue, score factors, related observations, raw record, append-only review history, notification history, and individual Markdown investigation report.
 - **Spatial and Temporal Analysis:** filtered summaries of configured connected associations.
 - **Feedback and Review History:** append-only audit records with outcome filtering.
-- **Notification Centre:** simulation-only payloads, attempts, duplicate suppression events, retry count, and history.
+- **Notification Centre:** simulation by default; optional SMTP test alerts are restricted to the synthetic demo and fully audited.
 - **Evaluation:** synthetic functional checks only; no accuracy, precision, recall, or real-world predictions.
 - **Settings and About:** scoring weights and scales, provenance, and limitations.
 

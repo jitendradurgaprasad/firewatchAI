@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import smtplib
 import uuid
 from datetime import datetime, timezone
+from email.message import EmailMessage
 
 from .storage import record_notification_attempt
 
@@ -16,6 +18,47 @@ class SimulatedNotificationProvider:
     def deliver(self, payload: dict, recipient: str) -> dict:
         del payload, recipient
         return {"status": "simulated", "response": "Simulation recorded locally; no external message was sent."}
+
+
+class SMTPTestNotificationProvider:
+    """Send explicitly synthetic test notices through a configured SMTP relay."""
+
+    def __init__(self, *, host: str, port: int, username: str, password: str,
+                 from_address: str, timeout: float = 15.0):
+        if not all((host.strip(), username.strip(), password, from_address.strip())):
+            raise ValueError("SMTP host, username, password, and sender are required.")
+        self.host, self.port = host.strip(), int(port)
+        self.username, self.password = username.strip(), password
+        self.from_address, self.timeout = from_address.strip(), float(timeout)
+
+    def deliver(self, payload: dict, recipient: str) -> dict:
+        if not payload.get("test_only") or not payload.get("synthetic_data"):
+            raise ValueError("Email provider accepts synthetic test alerts only.")
+        msg = EmailMessage()
+        msg["Subject"] = "[FIREWATCH SYNTHETIC TEST] Simulated forest-fire alert"
+        msg["From"] = self.from_address
+        msg["To"] = recipient
+        msg.set_content(
+            "FIREWATCH HACKATHON TEST — SYNTHETIC DATA ONLY\n\n"
+            "This is a software demonstration. It is not a real fire alert and must not be used for emergency response.\n\n"
+            f"Scenario record: {payload.get('observation_id', 'unknown')}\n"
+            f"Synthetic event time (UTC): {payload.get('observation_datetime_utc', 'unknown')}\n"
+            f"Synthetic coordinates: {payload.get('latitude')}, {payload.get('longitude')}\n"
+            f"Synthetic priority: {payload.get('priority_category', 'unknown')} "
+            f"(score {payload.get('priority_score', 'unknown')})\n"
+            f"Synthetic scenario: {payload.get('synthetic_scenario', 'generated') }\n\n"
+            "The locations, sensor-like values, and labels were generated locally. "
+            "This message does not report a real-world observation.\n"
+        )
+        with smtplib.SMTP(self.host, self.port, timeout=self.timeout) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(self.username, self.password)
+            refused = server.send_message(msg)
+        if recipient in refused:
+            raise RuntimeError("SMTP relay refused this recipient.")
+        return {"status": "provider-accepted", "response": "SMTP relay accepted the test message; inbox delivery is unconfirmed."}
 
 
 def build_notification_payload(observation: dict, *, trigger_reason: str,
@@ -34,6 +77,8 @@ def build_notification_payload(observation: dict, *, trigger_reason: str,
         "instrument": str(observation.get("instrument") or "Unknown"),
         "product": str(observation.get("product") or "Unknown"),
         "source": str(observation.get("source_name") or "Unknown"),
+        "synthetic_data": "SYNTHETIC" in str(observation.get("source_name") or "").upper(),
+        "test_only": "SYNTHETIC" in str(observation.get("source_name") or "").upper(),
         "confidence": observation.get("confidence"),
         "frp_mw": observation.get("frp"),
         "bright_ti4": observation.get("bright_ti4"),
@@ -56,8 +101,8 @@ def build_notification_payload(observation: dict, *, trigger_reason: str,
     }
 
 
-def notification_dedupe_key(observation_id: str, trigger_reason: str) -> str:
-    basis = f"{observation_id.strip()}|{trigger_reason.strip().casefold()}"
+def notification_dedupe_key(observation_id: str, trigger_reason: str, recipient: str | None = None) -> str:
+    basis = f"{observation_id.strip()}|{trigger_reason.strip().casefold()}|{(recipient or '').strip().casefold()}"
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()
 
 
