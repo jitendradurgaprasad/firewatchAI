@@ -18,6 +18,9 @@ OUTCOMES = (
     "Non-fire thermal source",
     "Unable to determine",
     "Awaiting review",
+    "Duplicate",
+    "Inconclusive",
+    "Unable to verify",
 )
 
 
@@ -63,6 +66,12 @@ def initialize(conn: sqlite3.Connection) -> None:
         source_record TEXT NOT NULL,
         normalized_json TEXT NOT NULL,
         created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS observation_sources (
+        observation_id TEXT NOT NULL REFERENCES observations(observation_id),
+        import_id TEXT NOT NULL REFERENCES imports(import_id),
+        source_row_number INTEGER NOT NULL,
+        PRIMARY KEY(observation_id, import_id, source_row_number)
     );
     CREATE INDEX IF NOT EXISTS idx_observations_datetime ON observations(json_extract(normalized_json, '$.acq_datetime'));
     CREATE TABLE IF NOT EXISTS import_rejections (
@@ -110,6 +119,7 @@ def initialize(conn: sqlite3.Connection) -> None:
         attempted_at TEXT,
         provider_response TEXT NOT NULL DEFAULT '',
         retry_count INTEGER NOT NULL DEFAULT 0,
+        duplicate_attempts INTEGER NOT NULL DEFAULT 0,
         error_details TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS notification_events (
@@ -135,6 +145,9 @@ def initialize(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE feedback ADD COLUMN verified_jurisdiction TEXT")
     if "jurisdiction_verified" not in feedback_columns:
         conn.execute("ALTER TABLE feedback ADD COLUMN jurisdiction_verified INTEGER NOT NULL DEFAULT 0")
+    notification_columns = {row[1] for row in conn.execute("PRAGMA table_info(notifications)")}
+    if "duplicate_attempts" not in notification_columns:
+        conn.execute("ALTER TABLE notifications ADD COLUMN duplicate_attempts INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -164,12 +177,20 @@ def save_import(conn: sqlite3.Connection, result, *, import_id: str) -> None:
         source_record = row.get("source_record", "{}")
         normalized = {k: _json_value(v) for k, v in row.items() if k != "source_record"}
         normalized.update({"source_name": metadata["source"],
+                           "product": metadata.get("product", ""),
                            "source_retrieved_at": metadata["retrieved_at"],
                            "source_attribution": metadata.get("licence_attribution", ""),
+                           "source_quality_warnings": metadata.get("quality_warnings", []),
+                           "available_fields": metadata.get("available_fields", []),
+                           "source_filename": metadata.get("filename", ""),
+                           "source_file_sha256": metadata.get("file_sha256", ""),
+                           "source_file_size_bytes": metadata.get("file_size_bytes"),
                            "import_id": import_id})
         conn.execute("INSERT OR IGNORE INTO observations VALUES(?, ?, ?, ?, ?)",
                      (row["observation_id"], import_id, source_record,
                       json.dumps(normalized, ensure_ascii=False, allow_nan=False), now))
+        conn.execute("INSERT OR IGNORE INTO observation_sources(observation_id,import_id,source_row_number) VALUES(?,?,?)",
+                     (row["observation_id"], import_id, int(row.get("source_row_number", 0))))
     for row in result.rejected.to_dict(orient="records"):
         conn.execute("INSERT INTO import_rejections(import_id, source_row_number, reason, source_record) VALUES(?, ?, ?, ?)",
                      (import_id, row.get("source_row_number"), row.get("rejection_reasons", "invalid"),
@@ -197,6 +218,20 @@ def load_rejections(conn: sqlite3.Connection) -> pd.DataFrame:
                           FROM import_rejections r JOIN imports i USING(import_id)
                           ORDER BY r.rejection_id DESC""").fetchall()
     return pd.DataFrame([dict(row) for row in rows])
+
+
+def load_observation_sources(conn: sqlite3.Connection, observation_id: str) -> pd.DataFrame:
+    """Return every import/file/row that supplied this deduplicated observation."""
+    rows = conn.execute("""SELECT s.source_row_number, i.import_id, i.source, i.filename,
+                          i.retrieved_at, i.metadata_json
+                          FROM observation_sources s JOIN imports i USING(import_id)
+                          WHERE s.observation_id=? ORDER BY i.created_at,s.source_row_number""",
+                        (observation_id,)).fetchall()
+    result = pd.DataFrame([dict(row) for row in rows])
+    if not result.empty:
+        result["product"] = result["metadata_json"].map(lambda raw: json.loads(raw).get("product", ""))
+        result = result.drop(columns=["metadata_json"])
+    return result
 
 
 def save_feedback(conn: sqlite3.Connection, *, observation_id: str, outcome: str,
@@ -281,6 +316,15 @@ def add_notification(conn: sqlite3.Connection, *, notification_id: str, observat
                       dedupe_key, json.dumps(payload, ensure_ascii=False), "queued", stamp))
     except sqlite3.IntegrityError as exc:
         if "dedupe_key" in str(exc) or "UNIQUE constraint failed: notifications.dedupe_key" in str(exc):
+            existing = conn.execute("SELECT notification_id FROM notifications WHERE dedupe_key=?", (dedupe_key,)).fetchone()
+            if existing:
+                stamp = datetime.now(timezone.utc).isoformat()
+                details = f"Duplicate request suppressed for trigger purpose: {trigger_reason}"
+                conn.execute("UPDATE notifications SET duplicate_attempts=duplicate_attempts+1 WHERE notification_id=?",
+                             (existing["notification_id"],))
+                conn.execute("INSERT INTO notification_events(notification_id,status,details,created_at) VALUES(?,?,?,?)",
+                             (existing["notification_id"], "duplicate_suppressed", details, stamp))
+                conn.commit()
             return False
         raise
     conn.execute("INSERT INTO notification_events(notification_id,status,details,created_at) VALUES(?,?,?,?)",

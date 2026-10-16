@@ -39,15 +39,24 @@ def _repeat_counts(frame: pd.DataFrame, radius_km: float, window_hours: float) -
     radius_chord = 2 * math.sin(min(radius_km, math.pi * EARTH_RADIUS_KM) /
                                 (2 * EARTH_RADIUS_KM))
     tree = cKDTree(xyz)
-    times = pd.to_datetime(frame["acq_datetime"], utc=True, errors="coerce").astype("int64").to_numpy()
+    parsed_times = pd.to_datetime(frame["acq_datetime"], utc=True, errors="coerce")
+    times = parsed_times.astype("datetime64[ns, UTC]").astype("int64").to_numpy()
     window_ns = int(window_hours * 3600 * 1_000_000_000)
-    neighbors = tree.query_ball_point(xyz, radius_chord)
     output = []
-    for idx, ids in enumerate(neighbors):
-        output.append(sum(1 for other in ids if other != idx and
-                          times[idx] != np.iinfo(np.int64).min and
-                          times[other] != np.iinfo(np.int64).min and
-                          abs(int(times[idx]) - int(times[other])) <= window_ns))
+    missing_time = np.iinfo(np.int64).min
+    for start in range(0, len(xyz), 2048):
+        stop = min(start + 2048, len(xyz))
+        neighbors = tree.query_ball_point(xyz[start:stop], radius_chord)
+        for offset, ids in enumerate(neighbors):
+            idx = start + offset
+            candidates = np.asarray(ids, dtype=np.int64)
+            candidates = candidates[candidates != idx]
+            if times[idx] == missing_time:
+                output.append(0)
+            else:
+                candidate_times = times[candidates]
+                candidate_times = candidate_times[candidate_times != missing_time]
+                output.append(int(np.count_nonzero(np.abs(candidate_times - times[idx]) <= window_ns)))
     return output
 
 
@@ -60,6 +69,9 @@ def score_observations(
     repeat_radius_km: float = 1.0,
     repeat_window_hours: float = 24.0,
     frp_cap_mw: float = 500.0,
+    minimum_coverage: float = 0.60,
+    medium_threshold: float = 45.0,
+    high_threshold: float = 70.0,
 ) -> pd.DataFrame:
     """Return a copy with factor scores, coverage, category, and explanation.
 
@@ -70,6 +82,8 @@ def score_observations(
     """
     if half_life_hours <= 0 or repeat_radius_km <= 0 or repeat_window_hours <= 0 or frp_cap_mw <= 0:
         raise ValueError("Scoring time, distance, and FRP scales must be positive.")
+    if not 0 <= minimum_coverage <= 1 or not 0 <= medium_threshold < high_threshold <= 100:
+        raise ValueError("Coverage must be 0–1 and thresholds must satisfy 0 ≤ medium < high ≤ 100.")
     active_weights = dict(DEFAULT_WEIGHTS if weights is None else weights)
     if set(active_weights) != set(DEFAULT_WEIGHTS):
         raise ValueError(f"Weights must contain exactly: {', '.join(DEFAULT_WEIGHTS)}")
@@ -83,7 +97,8 @@ def score_observations(
     result = observations.copy()
     if result.empty:
         for col in ("priority_score", "priority_category", "score_coverage", "explanation",
-                    "missing_factors", "repeat_count", "review_status"):
+                    "missing_factors", "repeat_count", "review_status", "contributing_factors",
+                    "data_quality_warnings"):
             if col not in result:
                 result[col] = pd.Series(dtype="object")
         return result
@@ -109,7 +124,7 @@ def score_observations(
         except (TypeError, ValueError):
             frp_values.append(None)
 
-    scores, categories, coverages, explanations, missings = [], [], [], [], []
+    scores, categories, coverages, explanations, missings, contributions_by_row = [], [], [], [], [], []
     for i in range(len(result)):
         factors = {"recency": float(recency.iloc[i]) if pd.notna(recency.iloc[i]) else None,
                    "confidence": confidence[i], "frp": frp_values[i],
@@ -121,16 +136,18 @@ def score_observations(
         coverage = sum(active_weights[k] for k in available)
         denominator = coverage or 1.0
         score = 100 * sum(active_weights[k] * v for k, v in available.items()) / denominator
-        if coverage < 0.60 or present_count < 2:
+        if coverage < minimum_coverage or present_count < 2:
             category = "INSUFFICIENT INFORMATION"
-        elif score >= 70:
+        elif score >= high_threshold:
             category = "HIGH REVIEW PRIORITY"
-        elif score >= 45:
+        elif score >= medium_threshold:
             category = "MEDIUM REVIEW PRIORITY"
         else:
             category = "LOW REVIEW PRIORITY"
         contributions = [f"{k}: {100 * active_weights[k] * v / denominator:.1f} points"
                         for k, v in available.items()]
+        contributions_by_row.append({k: round(active_weights[k] * v / denominator, 6)
+                                     for k, v in available.items()})
         if missing:
             contributions.append("Not scored because missing: " + ", ".join(missing))
         if repeats[i]:
@@ -149,4 +166,7 @@ def score_observations(
     result["explanation"] = explanations
     result["missing_factors"] = missings
     result["repeat_count"] = repeats
+    result["contributing_factors"] = contributions_by_row
+    result["data_quality_warnings"] = ["Missing score inputs: " + value if value else ""
+                                       for value in missings]
     return result

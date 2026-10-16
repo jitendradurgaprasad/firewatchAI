@@ -17,6 +17,10 @@ from typing import BinaryIO
 import pandas as pd
 
 
+MAX_CSV_BYTES = 50 * 1024 * 1024
+MAX_INTERACTIVE_ROWS = 100_000
+
+
 ALIASES = {
     "latitude": ("latitude", "lat"),
     "longitude": ("longitude", "lon", "long"),
@@ -53,18 +57,35 @@ class ImportResult:
     metadata: dict
 
 
-def _read_source(source: str | Path | bytes | bytearray | BinaryIO) -> tuple[bytes, str]:
+def _safe_chunk_iterator(reader):
+    try:
+        yield from reader
+    except (pd.errors.ParserError, UnicodeDecodeError, ValueError, OSError) as exc:
+        raise IngestionError(f"Malformed or unsupported CSV row: {exc}") from exc
+
+
+def _read_source(source: str | Path | bytes | bytearray | BinaryIO,
+                 max_bytes: int = MAX_CSV_BYTES) -> tuple[bytes, str]:
     if isinstance(source, (str, Path)):
         path = Path(source)
         if not path.is_file():
             raise IngestionError(f"CSV file was not found: {path}")
+        if path.stat().st_size > max_bytes:
+            raise IngestionError(f"CSV exceeds the interactive size limit of {max_bytes // (1024 * 1024)} MiB.")
         return path.read_bytes(), path.name
     if isinstance(source, (bytes, bytearray)):
+        if len(source) > max_bytes:
+            raise IngestionError(f"CSV exceeds the interactive size limit of {max_bytes // (1024 * 1024)} MiB.")
         return bytes(source), "uploaded.csv"
     name = Path(getattr(source, "name", "uploaded.csv")).name
+    size = getattr(source, "size", None)
+    if size is not None and size > max_bytes:
+        raise IngestionError(f"CSV exceeds the interactive size limit of {max_bytes // (1024 * 1024)} MiB.")
     data = source.read()
     if isinstance(data, str):
         data = data.encode("utf-8")
+    if len(data) > max_bytes:
+        raise IngestionError(f"CSV exceeds the interactive size limit of {max_bytes // (1024 * 1024)} MiB.")
     return bytes(data), name
 
 
@@ -121,13 +142,20 @@ def ingest_firms_csv(
     licence_attribution: str | None = None,
     retrieved_at: datetime | None = None,
     chunk_size: int = 50_000,
+    product: str | None = None,
+    original_filename: str | None = None,
+    max_bytes: int = MAX_CSV_BYTES,
+    max_rows: int = MAX_INTERACTIVE_ROWS,
 ) -> ImportResult:
     """Read a FIRMS CSV, retaining every source row and rejecting with reasons.
 
     The pandas parser reads bounded chunks; valid and rejected records are
     returned separately, with exact original row values retained as JSON.
     """
-    data, filename = _read_source(source)
+    if chunk_size < 1 or max_rows < 1:
+        raise IngestionError("chunk_size and max_rows must be positive integers.")
+    data, detected_filename = _read_source(source, max_bytes=max_bytes)
+    filename = Path(original_filename).name if original_filename else detected_filename
     if not data.strip():
         raise IngestionError("The CSV file is empty.")
     try:
@@ -138,7 +166,7 @@ def ingest_firms_csv(
         raise IngestionError(f"Unsupported CSV delimiter {dialect.delimiter!r}; expected comma-separated FIRMS data.")
     try:
         chunks = pd.read_csv(io.BytesIO(data), dtype=str, keep_default_na=False, chunksize=chunk_size,
-                             encoding="utf-8-sig", on_bad_lines="error")
+                             encoding="utf-8-sig", on_bad_lines="error", skip_blank_lines=False)
         columns = list(chunks._engine.names)
     except Exception as exc:
         raise IngestionError(f"Unsupported or malformed CSV: {exc}") from exc
@@ -156,8 +184,10 @@ def ingest_firms_csv(
     seen: set[str] = set()
     total = duplicates = row_number = 0
 
-    for chunk in chunks:
+    for chunk in _safe_chunk_iterator(chunks):
         for raw_values in chunk.to_dict(orient="records"):
+            if total >= max_rows:
+                raise IngestionError(f"CSV exceeds the interactive limit of {max_rows:,} rows; query a smaller area or time window.")
             total += 1
             row_number += 1
             raw = {str(k): str(v) for k, v in raw_values.items()}
@@ -218,7 +248,8 @@ def ingest_firms_csv(
                 reasons.append("unexpected_daynight")
             if "type" in normalized and normalized["type"]:
                 try:
-                    if int(float(normalized["type"])) not in {0, 1, 2, 3}:
+                    type_value = float(normalized["type"])
+                    if not math.isfinite(type_value) or not type_value.is_integer() or int(type_value) not in {0, 1, 2, 3}:
                         raise ValueError
                 except ValueError:
                     reasons.append("unexpected_hotspot_type")
@@ -269,7 +300,10 @@ def ingest_firms_csv(
         retrieved = retrieved.replace(tzinfo=timezone.utc)
     metadata = {
         "source": source_description or f"User-uploaded CSV: {filename}",
+        "product": (product or "").strip(),
         "filename": filename,
+        "file_sha256": hashlib.sha256(data).hexdigest(),
+        "file_size_bytes": len(data),
         "retrieved_at": retrieved.astimezone(timezone.utc).isoformat(),
         "date_range_start": dates.min().isoformat() if len(dates) else None,
         "date_range_end": dates.max().isoformat() if len(dates) else None,
@@ -277,6 +311,9 @@ def ingest_firms_csv(
         "valid_records": len(valid_rows),
         "rejected_records": len(rejected_rows),
         "licence_attribution": licence_attribution or "Attribution supplied by the uploader; verify source terms before reuse.",
+        "available_fields": sorted(selected),
+        "quality_warnings": ([f"Optional supported fields missing from file: {', '.join(k for k in SUPPORTED if k not in selected)}"]
+                             if any(k not in selected for k in SUPPORTED if k not in {"jurisdiction", "type", "brightness"}) else []),
     }
     report = {
         "total_rows": total,

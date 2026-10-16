@@ -71,6 +71,8 @@ def create_observation_map(observations: pd.DataFrame, *, max_markers: int = 500
             ("Score", row.get("priority_score", "Not scored")),
             ("Explanation", row.get("explanation", "")),
             ("Review status", row.get("review_status", "Awaiting review")),
+            ("Spatial/time association", row.get("association_id") or "None"),
+            ("Nearby observations", row.get("nearby_observation_count", 0)),
         )
         popup_html = "<br>".join(f"<b>{html.escape(str(k))}:</b> {html.escape(str(v))}" for k, v in fields)
         folium.Marker(location=[float(row["latitude"]), float(row["longitude"])],
