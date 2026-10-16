@@ -20,7 +20,7 @@ The default installation also retains requirements for the legacy image-classifi
 
 ## Included sample and provenance
 
-The first launch imports the included [NASA FIRMS Academy VIIRS SNPP sample](https://firms.modaps.eosdis.nasa.gov/content/academy/data_ingest/firms_data_ingest.html), whose acquisitions are dated 2023-07-12. Its original CSV and retrieval metadata are in `sample_data/`. The source file is 6,077,404 bytes (about 5.8 MiB), with 74,605 rows. Validation produced 74,599 valid rows and six exact duplicate rows. All six duplicates are excluded after their first occurrence and retained in the rejected-row audit.
+The first launch imports the included [NASA FIRMS Academy VIIRS SNPP sample](https://firms.modaps.eosdis.nasa.gov/content/academy/data_ingest/firms_data_ingest.html), whose acquisitions are dated 2023-07-12. Its original CSV and retrieval metadata are in `sample_data/`. The source file is 6,077,404 bytes (about 5.8 MiB), with 74,605 rows. Validation produced 74,599 unique valid rows and six exact duplicate rows. Raw confidence counts include all source rows (including duplicates); the unique valid counts are 64,895 nominal, 4,912 high, and 4,792 low. Raw product-version counts are 69,507 NRT and 5,098 URT; unique valid rows contain 69,507 NRT and 5,092 URT. All duplicates are excluded after their first occurrence and retained in the rejection audit.
 
 NASA FIRMS describes confidence as low, nominal, or high (with product-specific encodings); it is a detection confidence field, not a probability that a wildfire exists. FIRMS active-fire observations can include non-wildfire thermal sources such as industrial heat and volcanoes. Refer to the [VIIRS 375 m product field guide](https://modaps.modaps.eosdis.nasa.gov/services/about/products/viirs-land-c2-nrt/vnp14imgtdl_nrt.html) and FIRMS documentation for interpretation.
 
@@ -32,15 +32,21 @@ The bundled sample is for software and workflow demonstration. It is one acquisi
 
 The adapter supports comma-separated FIRMS-style data and aliases for latitude, longitude, acquisition date/time, satellite/instrument, confidence, FRP, brightness, scan/track, day/night, version, hotspot type, and jurisdiction. Latitude, longitude, acquisition date, and acquisition time are required. It accepts common FIRMS timestamp encodings and interprets acquisition time as UTC.
 
-Every parsed input row is retained as either a valid observation or a rejected record with original source values and reason codes. It checks coordinates, dates/times, numerical fields, confidence, day/night and hotspot type. Exact duplicate source rows after the first are rejected. Missing optional values are reported and remain missing; the adapter does not infer labels or fill data. Imports are chunk-read to bound CSV parsing memory, while valid and rejected rows are stored in SQLite.
+Every parsed input row is retained as either a valid observation or a rejected record with original source values and reason codes. It checks coordinates, dates/times, numerical fields, confidence, day/night and hotspot type. Exact duplicate source rows after the first are rejected. Missing optional values are reported and remain missing; the adapter does not infer labels or fill data. Imports are parsed in 50,000-row chunks and limited to 50 MiB and 100,000 rows for interactive use; accepted rows and rejection details are stored in SQLite.
 
-Use **Import Data** to add a CSV. The uploader must provide source and licence/attribution details. These text fields record what was supplied; the app does not independently verify user-uploaded data rights or authenticity. Review validation counts, download rejection details, then use the map/table and observation details.
+Use **Import Data** to add an uploaded CSV or local CSV path. Provide source, product if known, and licence/attribution details. These text fields record what was supplied; the app does not independently verify user-uploaded data rights or authenticity. Review validation counts, download rejection details, then use the map/table and observation details.
+
+### Optional NASA FIRMS live refresh
+
+The app implements NASA's official [Area CSV API](https://firms.modaps.eosdis.nasa.gov/api/area/), which requires a free [FIRMS MAP_KEY](https://firms.modaps.eosdis.nasa.gov/api/map_key/). Put it in a private local `.env` copied from `.env.example` as `FIRMS_MAP_KEY=...`, then restart Streamlit. The app never stores or displays the key. Requests use an allowlisted NRT product, bounded west/south/east/north coordinates, 1–5 days, a timeout and a 50 MiB response ceiling. Choose **Import Data → Refresh from NASA FIRMS Area API**. Without the key or network, the bundled static sample and CSV import remain available. The live request is never described as the static sample. There is no scheduled refresh.
 
 ## Review-priority calculation
 
 The default score combines recency (20%), FIRMS confidence (25%), FRP (25%), nearby repeat detections (25%), and input completeness (5%). FIRMS categorical confidence is mapped to fixed heuristic values (low 0.30, nominal 0.65, high 0.90); numeric confidence is interpreted on a 0–100 scale. FRP uses a configurable log scale that saturates at 500 MW. Recency uses a 72-hour half-life. Repeat detections count other observations within 1 km and 24 hours, capped at five for the factor score.
 
-If factors are missing, remaining active weights are renormalized and missing factors are identified in the explanation. Coverage below 60%, or fewer than two available factors, yields **INSUFFICIENT INFORMATION**. Otherwise scores below 45 are low, 45–69.99 medium, and 70+ high review priority. These are configurable heuristics, not calibrated probabilities, fire severity, or operational thresholds. Confidence and FRP are related sensor signals; their combined default contribution is capped at 50%. Settings can change weights, time/distance scales, FRP cap, and whether recency is referenced to the newest record or current UTC time.
+If factors are missing, remaining active weights are renormalized and missing factors are identified in the explanation. Coverage below 60%, or fewer than two available factors, yields **INSUFFICIENT INFORMATION**. Otherwise scores below 45 are low, 45–69.99 medium, and 70+ high review priority. These are configurable heuristics, not calibrated probabilities, fire severity, or operational thresholds. Confidence and FRP are related sensor signals; their combined default contribution is 50%, while custom weights may change that. Settings can change weights, thresholds, time/distance scales, FRP cap, and whether recency is referenced to the newest record or current UTC time.
+
+Spatial/time association connects observations when both great-circle distance and UTC acquisition-time limits are met. It reports connected groups, direct-neighbor counts, time span, coordinate bounds and observed satellite names. Groups can include transitive chains and are not fire perimeters or confirmed events. Analysis runs only when requested on its page and is capped to the newest configured number of filtered observations (10,000 by default) to keep dashboard startup responsive.
 
 ## Human review, routing, and notifications
 
@@ -61,18 +67,20 @@ Set these optional environment variables before starting Streamlit:
 - `FIREWATCH_DB_PATH`: explicit SQLite path (takes precedence).
 - `FIREWATCH_AUTOLOAD_SAMPLE`: `0`/`false` disables the bundled sample import; default is enabled.
 - `FIREWATCH_REVIEWER_ID`: pre-fills and locks the reviewer identifier field.
-- `FIREWATCH_DELIVERY_MODE`: documented deployment intent; dashboard currently remains simulation-only regardless of value.
+- `FIREWATCH_DELIVERY_MODE`: retained for configuration clarity; the app remains simulation-only regardless of value.
+- `FIRMS_MAP_KEY`: optional NASA FIRMS API key. Keep it in a private local `.env` or process environment; never commit it.
 
-Copy `.env.example` as a starting point if your launch environment loads dotenv files. Keep credentials and private operational data outside Git. There is no FIRMS API key configured and live data fetching is not implemented; users can import a downloaded CSV.
+The app loads `.env` values with python-dotenv. Keep credentials and private operational data outside Git. The API key is only used for an explicit user-triggered Area API query.
 
 ## Navigation
 
-- **Overview:** counts, queue summary, charts, and next review items.
+- **Overview:** unique stored records, accepted/rejected source-row totals, review categories, feedback/notification totals, coverage and charts.
 - **Import Data / Data Validation:** CSV import, row accounting, missing-field counts, and rejection exports.
 - **Observation Map / Observation Table:** filtering, selectable observations, and spreadsheet-safe CSV exports.
-- **Priority Review Queue / Observation Details:** sorted work queue, score explanation, original record, and human review form.
-- **Feedback and Review History:** append-only audit records.
-- **Notification Centre:** simulation-only notification records and history.
+- **Priority Review Queue / Observation Details:** sorted queue, score factors, related observations, raw record, append-only review history, notification history, and individual Markdown investigation report.
+- **Spatial and Temporal Analysis:** filtered summaries of configured connected associations.
+- **Feedback and Review History:** append-only audit records with outcome filtering.
+- **Notification Centre:** simulation-only payloads, attempts, duplicate suppression events, retry count, and history.
 - **Evaluation:** synthetic functional checks only; no accuracy, precision, recall, or real-world predictions.
 - **Settings and About:** scoring weights and scales, provenance, and limitations.
 
@@ -80,7 +88,17 @@ CSV exports neutralize spreadsheet formula-like text values. The map requires in
 
 ## Verification
 
-Run the suite with `python -m pytest -q`. Dashboard tests cover row accounting and duplicates, the sample’s observed counts, score behavior, map coordinate checks, feedback persistence, routing, notification deduplication/retry audit, CSV formula safety, and functional scoring checks. Existing legacy prototype tests remain in the suite.
+Run the suite with `python -m pytest -q`. Tests cover row accounting and duplicates, sample counts, score thresholds and factor explanations, map coordinates, spherical distance/time associations, feedback persistence and migration, API validation, notification deduplication/retry audit, CSV formula safety, investigation reports and UI empty state. Existing legacy prototype tests remain in the suite. See [docs/EVALUATION_REPORT.md](docs/EVALUATION_REPORT.md) for executed results and interpretation.
+
+## Detailed documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [User guide](docs/USER_GUIDE.md)
+- [Demo script and judge questions](docs/DEMO_SCRIPT.md)
+- [Evaluation report](docs/EVALUATION_REPORT.md)
+- [Limitations and future improvements](docs/LIMITATIONS.md)
+
+The map needs internet access for OpenStreetMap tiles; markers remain sourced from imported records. NASA announced Suomi-NPP product delivery will cease on 2026-11-01. Live API defaults to NOAA-20 NRT and also offers NOAA-21; the bundled historical sample remains explicitly SNPP. Consult the current [FIRMS Area API product list](https://firms.modaps.eosdis.nasa.gov/api/area/) when selecting live data.
 
 ## Legacy image prototype
 
