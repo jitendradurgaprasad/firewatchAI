@@ -8,13 +8,13 @@
 - Dataset research: EO4WildFires (25.5 GB, CC-BY-SA-4.0) labels wildfire/burned-area outcomes rather than visible flames; not downloaded. Identified the California Sentinel-2 Active-Fire Segmentation Dataset (937.1 MB, CC BY 4.0) with weak SWIR-rule labels, hand-reviewed subset, and event split. Download requested separately; no archive has been fetched yet.
 - No changes were made during inspection.
 
-## Phase B — image and ML foundation (in progress)
+## Phase B — image and ML foundation (complete)
 
 - Implemented strict JPEG/PNG image validation, manifest validation, content-hash duplicate detection, event-disjoint splitting, ResNet-18 training and checkpoint metadata, structured abstaining inference, metrics, CLI, tests, and initial documentation.
 - `py -3.11 -m pytest -q`: 9 passed, including checkpoint save/load and abstention-threshold behavior. `git diff --check`: passed. No large files or credential-like strings were staged.
 - Training/inference have not been run; no weights or actual labeled samples are available yet.
 - Files: `firewatch/`, `tests/`, `requirements.txt`, `pytest.ini`, `.gitignore`, `README.md`, `DEVELOPMENT_LOG.md`.
-- Commits: `fd2b8f7619dd8fb5132ff55a70a80e7b21d443a0` (`feat: add satellite fire classification foundation`) and `96d0ff51ee489d808197fb067913bed0ff56c8d7` (verification log). Added checkpoint roundtrip and threshold tests in a follow-up commit; pending push.
+- Commits: `fd2b8f7619dd8fb5132ff55a70a80e7b21d443a0`, `96d0ff51ee489d808197fb067913bed0ff56c8d7`, and `2b8b0800dd54ddf0d0aad80650139677914a0f8a`; the final commit includes checkpoint roundtrip and threshold tests. `origin/main` was verified at `2b8b0800dd54ddf0d0aad80650139677914a0f8a` before this phase.
 
 ## Phase C — active-fire dataset sample inspection (complete)
 
@@ -33,4 +33,21 @@
 - Training is intentionally blocked by the two-class data guard. The 1,307 mask-zero chips are not negative-labeled because the mask has no cloud class; they require cloud-aware/manual review or another suitable labeled source. No model checkpoint or evaluation metric was produced.
 - Added adapter/split and single-class training-guard tests. `py -3.11 -m pytest -q`: 13 passed; `git diff --check`: passed. Local manifest check: 841 rows, one class, event split sizes 548/137/156, train-ready false.
 - Files: `firewatch/california_dataset.py`, `firewatch/data.py`, `firewatch/cli.py`, `firewatch/model.py`, `tests/test_core.py`, `README.md`, `DEVELOPMENT_LOG.md`.
+- Commit/push: `2b8b0800dd54ddf0d0aad80650139677914a0f8a` (`feat: validate satellite fire mask dataset`), pushed to and verified on `origin/main`.
+
+## Phase E — annotation readiness and NVIDIA runtime (complete)
+
+- Reviewed the official Zenodo record/archive and upstream GitHub repository and `label_batch/README.md`. The archive contains the 233 analyst brush masks for held-out test chips but no completed Label Studio export JSON; the protocol states the JSON is needed to identify reviewed-empty tasks and separate active-fire from uncertain strokes. The public repository tree contains the protocol and masks, but no Label Studio export JSON. The 233 chips cover 54% of the held-out test split and do not provide train/validation negatives even if their export were recovered.
+- Revalidated the installed California dataset through the application readiness path: 2,148 image/mask pairs passed; 841 weak positive candidates; 0 reviewed negatives; 1,307 uncertain/no-positive-mask chips; 0 skipped for no-data; training not ready.
+- NVIDIA RTX 2050 Laptop GPU is detected (4 GB). Python 3.11.3 environment: PyTorch `2.12.0+cu130`, torchvision `0.27.0+cu130`, PyQt6 `6.11.0`, PyTorch CUDA runtime `13.0`; driver `592.82` reports CUDA `13.1`. A CUDA tensor allocation and matrix operation succeeded on `cuda:0`. No system driver/toolkit changes were needed.
+- Environment is kept under `%LOCALAPPDATA%\FireWatchAI\venv`; no new dataset was downloaded. The already approved 937 MB archive remains outside the repository.
+- Tests/verification: full suite passed (22 tests); `compileall` and `git diff --check` passed. No training was launched because the source lacks valid negative labels.
 - Commit/push: pending.
+
+## Phase F — PyQt6 desktop GUI and safe training controls (in progress)
+
+- Added `python -m firewatch.gui`: local PyQt6 window with RGB JPEG/PNG selection, strict validation, aspect-preserving display thumbnail, clear/replace action, configurable abstention threshold, structured prediction display, model/checkpoint state, dataset readiness, and NVIDIA/CUDA status. Detection remains disabled without a trained, evaluated, CUDA-verified checkpoint and calls the existing inference module.
+- Added asynchronous dataset validation and prediction; training uses a `QThread` worker with signal-based progress, batch-boundary stop, validation/test results, exception logging, and CUDA out-of-memory recovery by clearing cache and retrying at a smaller batch size. CPU fallback is not used.
+- Strengthened training/evaluation guards: both classes and documented non-HOTMAP label sources must exist in event-disjoint train/validation/test splits; training explicitly requires CUDA. Checkpoints record configuration, training device, and held-out metrics; GUI requires those metrics before showing Model Ready.
+- No trained checkpoint or real prediction/metric is available. Training stays blocked at the current dataset counts recorded in Phase E. Application remains local-only; no deployment or future FireWatch integrations were added.
+- Tests/verification on the local working tree: 22 passed; `compileall` and `git diff --check` passed. These changes are not yet committed or pushed. Phase F commit/push is pending.
