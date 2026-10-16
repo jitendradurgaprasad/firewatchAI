@@ -16,8 +16,11 @@
 - Files: `firewatch/`, `tests/`, `requirements.txt`, `pytest.ini`, `.gitignore`, `README.md`, `DEVELOPMENT_LOG.md`.
 - Commits: `fd2b8f7619dd8fb5132ff55a70a80e7b21d443a0` (`feat: add satellite fire classification foundation`) and `96d0ff51ee489d808197fb067913bed0ff56c8d7` (verification log). Added checkpoint roundtrip and threshold tests in a follow-up commit; pending push.
 
-## Phase C — active-fire dataset sample inspection (in progress)
+## Phase C — active-fire dataset sample inspection (complete)
 
-- User approved downloading the 937.1 MB California Sentinel-2 Active-Fire Segmentation Dataset archive for local sample inspection; archive must remain outside Git.
-- Pending: download integrity check, sample/mask/metadata inspection, and dataset-specific preparation decision.
-- Commit/push: pending.
+- User approved downloading the California Sentinel-2 Active-Fire Segmentation Dataset archive. Downloaded 937,057,654 bytes to local AppData outside the repository/OneDrive. Published MD5 verified: `926dc2793370965ac5a7799bdf25629e`.
+- Archive: 2,148 512×512 RGB PNG chips and masks; 25 fire event partitions (18 train / 3 val / 4 test), exact split sizes 1,470 / 246 / 432. `summary.csv` and `partitions.csv` agree on `fire` grouping; 548 / 137 / 156 chips have `fire_px > 0` across train / val / test. Corresponding zero-mask chips: 922 / 109 / 276.
+- Inspected sample images and masks. RGB composites are fixed-stretch B12/B11/B8A; masks use values 0 background, 1 active fire, 255 nodata. Sample masks agree with `fire_px` counts. Positive flame regions can be extremely small (sample with 9 active pixels), so the baseline 224×224 resize needs reconsideration.
+- Archive license states CC BY 4.0; imagery remains subject to Copernicus Sentinel terms and perimeters to NIFC/USGS open-data terms. Dataset source/attribution is documented in README.
+- The 233 analyst-review PNGs are only brush masks. The upstream protocol says the Label Studio JSON is needed to identify reviewed empty chips and uncertain annotations; that JSON is not in the data archive. Therefore the review subset cannot yet be treated as a complete independent chip-classification test set. No model metric was fabricated.
+- Files changed: `README.md`, `DEVELOPMENT_LOG.md`. Tests: documentation/data inspection only; no code tests needed. Commit/push: pending.
