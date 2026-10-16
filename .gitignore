@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+data/
+datasets/
+active_fire_dataset/
+artifacts/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.tif
+*.tiff
+*.zip
