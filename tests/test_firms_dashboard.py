@@ -12,7 +12,8 @@ from firewatch.firms_ingest import IngestionError, ingest_firms_csv
 from firewatch.forest_context import ForestContextError, match_forest_context, parse_fsi_points
 from firewatch.map_view import create_observation_map, map_ready_observations, nearest_observation
 from firewatch.notifications import (SimulatedNotificationProvider, build_notification_payload,
-                                     SMTPTestNotificationProvider, dispatch_notification,
+                                     SMTPTestNotificationProvider, FormSubmitNotificationProvider,
+                                     dispatch_notification,
                                      notification_dedupe_key)
 from firewatch.ranking import score_observations
 from firewatch.storage import (add_authority, add_notification, connect, latest_feedback,
@@ -293,6 +294,51 @@ def test_smtp_test_provider_only_sends_labeled_synthetic_alerts(monkeypatch):
     assert seen["message"]["To"] == "person@example.test"
     assert "SYNTHETIC DATA ONLY" in seen["message"].get_content()
     assert "not a real fire alert" in seen["message"].get_content()
+
+
+def test_formsubmit_provider_sends_only_recent_real_firms_review_requests(monkeypatch):
+    from datetime import datetime, timezone
+    import json
+
+    seen = {}
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, limit):
+            assert limit == 64 * 1024
+            return b'{"success":"true","message":"success"}'
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["headers"] = request.headers
+        seen["fields"] = json.loads(request.data.decode("utf-8"))
+        seen["timeout"] = timeout
+        return Response()
+    monkeypatch.setattr("firewatch.notifications.urllib.request.urlopen", fake_urlopen)
+    provider = FormSubmitNotificationProvider()
+    payload = {
+        "synthetic_data": False, "test_only": False,
+        "source": "NASA FIRMS Area API (recent observations)",
+        "observation_id": "firms-live-1",
+        "observation_datetime_utc": datetime.now(timezone.utc).isoformat(),
+        "latitude": 10.5, "longitude": 78.25, "map_link": "https://maps.example/point",
+        "satellite": "NOAA-20", "instrument": "VIIRS", "confidence": "nominal",
+        "frp_mw": 4.2, "priority_category": "HIGH REVIEW PRIORITY", "priority_score": 80,
+        "jurisdiction": "Unknown — manual review required", "trigger_reason": "Manual review",
+    }
+    result = provider.deliver(payload, "ers@example.test")
+    assert result["status"] == "provider-accepted"
+    assert seen["url"].endswith("/ers@example.test")
+    assert seen["headers"]["Content-type"] == "application/json"
+    assert seen["fields"]["coordinates"] == "10.5, 78.25"
+    assert "not a confirmed wildfire" in seen["fields"]["message"]
+    assert "decide any response" in seen["fields"]["message"]
+
+    with pytest.raises(ValueError, match="synthetic/demo"):
+        provider.deliver({**payload, "synthetic_data": True}, "ers@example.test")
+    with pytest.raises(ValueError, match="last six days"):
+        provider.deliver({**payload, "observation_datetime_utc": "2020-01-01T00:00:00+00:00"},
+                         "ers@example.test")
 def test_csv_formula_injection_and_functional_evaluation(tmp_path):
     data = safe_csv_bytes(pd.DataFrame({"text":["=1+1", " normal"], "value":[-3, 2]})).decode("utf-8-sig")
     assert "'=1+1" in data and ", -3" not in data

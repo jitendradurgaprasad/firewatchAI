@@ -1,5 +1,14 @@
 # Development log
 
+## 2026-10-17 — FormSubmit ERS review email (complete)
+
+- Added an explicit FormSubmit action in Notification Centre for one selected, recent (up to six days old) observation sourced from the NASA FIRMS Area API. The ERS destination is configured locally as `FIREWATCH_ERS_EMAIL`; this checkout's ignored `.env` points it to the user-designated test inbox. No email was submitted during development.
+- The message includes the hotspot coordinates, map link, acquisition time, satellite/instrument, confidence, FRP, review-priority heuristic, and jurisdiction context. It clearly says this is an unconfirmed thermal anomaly and requests independent human verification; it does not direct dispatch or claim fire confirmation.
+- Synthetic, bundled historical sample, and user-uploaded records are blocked from this external email route. Duplicate requests are audited and suppressed; retries are available only after a failed recorded attempt. Existing simulation notifications and synthetic-only SMTP tests remain separate.
+- FormSubmit requires first-use recipient activation and reports only provider acceptance, not inbox delivery. Its documentation states submissions are retained for 30 days. No automatic background email loop or nearest-service lookup was added.
+- Configuration, provider behavior, retry scope, FormSubmit retention, manual-review disclaimer, and the control restrictions are documented in the README, user guide, and limitations. The destination address remains in ignored `.env`; it is not in Git.
+- Added a mocked FormSubmit provider test. Focused test passed; full suite passed using `%LOCALAPPDATA%\\FireWatchAI\\venv` (results collected during this change). No real FormSubmit request was made.
+
 ## Phase A — repository inspection
 
 - Inspected an empty checkout on `main`; no source files, commits, configured remotes, dependencies, tests, datasets, model weights, or uncommitted user changes were present.

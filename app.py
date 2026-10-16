@@ -1,4 +1,4 @@
-"""FireWatch FIRMS observation triage dashboard with synthetic-only test email."""
+"""FireWatch FIRMS observation triage dashboard with audited review notifications."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from firewatch.firms_ingest import IngestionError, MAX_CSV_BYTES, ingest_firms_c
 from firewatch.map_view import create_observation_map, nearest_observation
 from firewatch.notifications import (SimulatedNotificationProvider, build_notification_payload,
                                      SMTPTestNotificationProvider,
+                                     FormSubmitNotificationProvider,
                                      dispatch_notification,
                                      notification_dedupe_key)
 from firewatch.ranking import CORE_WEIGHTS, DEFAULT_WEIGHTS, score_observations
@@ -770,7 +771,7 @@ def main() -> None:
                 _review_form(conn, observation, authorities)
 
     elif page == "Notification Centre":
-        st.warning("Synthetic email test only: outgoing email is allowed only for records from the generated synthetic demo. Every email is prominently labeled as synthetic; no real fire observations should be emailed as alerts.")
+        st.warning("FIRMS detections are unconfirmed thermal anomalies. Any email here requests manual review only; FireWatch does not dispatch response teams or confirm fires.")
         if not scored.empty:
             st.subheader("Queue an observation for review")
             observation = _selected_observation(scored, key="notification_observation_id")
@@ -793,6 +794,48 @@ def main() -> None:
                         response = dispatch_notification(conn, notification_id,
                                                          SimulatedNotificationProvider())
                         st.success(f"Notification {notification_id} recorded with status `{response['status']}`; no message was sent.")
+                        st.rerun()
+                st.divider()
+                st.subheader("Send a FIRMS review request to ERS support")
+                ers_email = os.environ.get("FIREWATCH_ERS_EMAIL", "").strip()
+                source_name = str(observation.get("source_name") or "")
+                acquired = pd.to_datetime(observation.get("acq_datetime"), utc=True, errors="coerce")
+                age_hours = ((pd.Timestamp.now(tz="UTC") - acquired).total_seconds() / 3600
+                             if pd.notna(acquired) else float("inf"))
+                eligible_live_record = ("NASA FIRMS Area API" in source_name and
+                    "SYNTHETIC" not in source_name.upper() and -0.25 <= age_hours <= 144)
+                st.caption("Uses FormSubmit to email the configured support inbox. The recipient must complete FormSubmit's one-time email activation before submissions can be delivered. Coordinates and record metadata are sent to FormSubmit; its documentation says submissions are retained for 30 days.")
+                st.write(f"**ERS support inbox:** {ers_email or 'not configured in private .env'}")
+                if not eligible_live_record:
+                    st.info("Email is enabled only for NASA FIRMS Area API observations acquired within the last six days. Historical sample, uploaded, and synthetic rows cannot be emailed through this route.")
+                if not ers_email:
+                    st.info("Set FIREWATCH_ERS_EMAIL in the private local .env file and restart FireWatch.")
+                manual_review_ack = st.checkbox(
+                    "I understand this is an unconfirmed anomaly review request; the authority decides whether to act.",
+                    key="ers_manual_review_ack")
+                send_ers_enabled = bool(ers_email and eligible_live_record and manual_review_ack)
+                if st.button("Email this anomaly to ERS support", type="primary", key="send_ers_formsubmit",
+                             disabled=not send_ers_enabled):
+                    email_payload = build_notification_payload(observation,
+                        trigger_reason="Manual ERS authority review request",
+                        routing_reason="User-designated ERS inbox; recipient is responsible for manual verification",
+                        recipient=ers_email)
+                    email_id = email_payload["alert_id"]
+                    email_dedupe = notification_dedupe_key(str(observation["observation_id"]),
+                        "ers_formsubmit_review_request", ers_email)
+                    created = add_notification(conn, notification_id=email_id,
+                        observation_id=str(observation["observation_id"]), recipient=ers_email,
+                        channel="formsubmit", trigger_reason="ers_formsubmit_review_request",
+                        dedupe_key=email_dedupe, payload=email_payload)
+                    if not created:
+                        st.warning("An ERS email request for this observation and inbox was already recorded. Use the audited retry action only if the previous attempt failed.")
+                    else:
+                        response = dispatch_notification(conn, email_id,
+                            FormSubmitNotificationProvider(), max_attempts=1)
+                        if response["status"] == "provider-accepted":
+                            st.success(f"FormSubmit accepted the review request ({email_id}). This does not confirm inbox delivery; the recipient may need to activate FormSubmit first.")
+                        else:
+                            st.error(f"Review email was not confirmed: {response['response']}")
                         st.rerun()
                 st.divider()
                 st.subheader("Send synthetic hackathon test email")
@@ -852,6 +895,12 @@ def main() -> None:
             if row["status"] in {"queued", "failed"} and st.button("Retry through simulation provider", key="retry_notification"):
                 response = dispatch_notification(conn, selected_notification, SimulatedNotificationProvider())
                 st.info(f"Retry audit result: {response['status']} (simulation only).")
+                st.rerun()
+            if row["channel"] == "formsubmit" and row["status"] == "failed" and st.button(
+                    "Retry failed FormSubmit request", key="retry_formsubmit_notification"):
+                response = dispatch_notification(conn, selected_notification,
+                    FormSubmitNotificationProvider(), max_attempts=1)
+                st.info(f"FormSubmit retry status: {response['status']} — {response['response']}")
                 st.rerun()
             st.download_button("Export notification audit", safe_csv_bytes(display_notifications),
                                file_name="firms_notification_audit.csv", mime="text/csv")
@@ -1030,7 +1079,7 @@ def main() -> None:
 
 **Jurisdiction.** FIRMS CSVs do not reliably provide administrative boundaries. The dashboard displays “Jurisdiction unknown — manual review required” unless a reviewer explicitly verifies a configured jurisdiction. Unknown routes to the internal simulation queue.
 
-**Delivery.** Default notifications are simulated. An optional SMTP path sends only conspicuously labeled synthetic hackathon test emails and blocks non-synthetic records. No webhook, SMS, or emergency-authority integration is provided.
+**Delivery.** Notifications are simulated by default. A manually requested FormSubmit review email is available only for recent NASA FIRMS Area API observations and the user-configured ERS inbox; it labels the record as an unconfirmed thermal anomaly requiring human review. FormSubmit must be activated by the recipient. A provider acceptance is not proof of inbox delivery, and FireWatch does not dispatch response teams. The separate optional SMTP path remains synthetic-demo-only.
 
 **NASA sample attribution.** NASA FIRMS Academy VIIRS SNPP sample, 2023-07-12; see `sample_data/nasa_firms_viirs_snpp_071223.json`. NASA ESDIS generally provides NASA-sponsored Earth science data as open data/CC0 unless a specific restriction applies; acknowledge NASA and do not imply NASA endorsement. FIRMS thermal anomalies are not confirmed wildfires.
 """)
@@ -1064,7 +1113,7 @@ def main() -> None:
                 **json.loads(i["metadata_json"]), **json.loads(i["report_json"])} for i in imports]),
                 width="stretch", hide_index=True)
         st.subheader("Application information")
-        st.write("This Streamlit dashboard triages NASA FIRMS thermal-anomaly records for human review. It uses no image classifier, GPU, Google Earth Engine, external reverse geocoder, or automated dispatch.")
+        st.write("This Streamlit dashboard triages NASA FIRMS thermal-anomaly records for human review. It uses no image classifier, GPU, Google Earth Engine, external reverse geocoder, or automated dispatch. FormSubmit email is a manual review request for recent FIRMS API records only.")
         st.write("Map tiles are served by OpenStreetMap and require internet access. Data persistence uses a local SQLite file. For local data storage configuration use `FIREWATCH_DATA_DIR` or `FIREWATCH_DB_PATH`.")
 
 

@@ -4,7 +4,7 @@
 
 **FireWatch AI is a human-review dashboard for prioritizing possible forest-fire hotspots in India.** It validates satellite thermal-anomaly records from NASA FIRMS, adds optional forest-area context from Forest Survey of India (FSI) point exports, and presents an explainable review queue with maps, source details, and an append-only feedback trail.
 
-It is a decision-support prototype. A satellite thermal anomaly is not proof of a wildfire, and the dashboard does not dispatch alerts to emergency authorities.
+It is a decision-support prototype. A satellite thermal anomaly is not proof of a wildfire, and the dashboard does not dispatch response teams. An operator can explicitly send a review request for a recent NASA FIRMS API record to the configured test/support inbox; the authority must independently verify it and decide whether to act.
 
 ## The problem
 
@@ -34,7 +34,7 @@ The prototype emphasizes traceability and cautious use: rejected input rows rema
 3. Review observations on the map/table and prioritize them using the displayed heuristic factors.
 4. Inspect nearby records and optional FSI forest-area context.
 5. Record a human assessment with source, reference, and event identifier when available.
-6. Demonstrate notification handling locally in simulation; no emergency authority is contacted.
+6. Demonstrate notification handling locally in simulation. The optional FormSubmit route is a separate manual review request, not an automatic dispatch.
 
 The satellite image viewer is a separate visual reference. It requests rendered NASA GIBS VIIRS imagery, but those pixels do not enter the current scoring or alert path. Refreshing every ten seconds does not mean that a new satellite capture is available every ten seconds.
 

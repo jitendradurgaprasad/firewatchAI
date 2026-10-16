@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import smtplib
 import uuid
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
@@ -59,6 +62,88 @@ class SMTPTestNotificationProvider:
         if recipient in refused:
             raise RuntimeError("SMTP relay refused this recipient.")
         return {"status": "provider-accepted", "response": "SMTP relay accepted the test message; inbox delivery is unconfirmed."}
+
+
+class FormSubmitNotificationProvider:
+    """Submit an explicit, recent NASA FIRMS review request through FormSubmit."""
+
+    def __init__(self, *, timeout: float = 20.0):
+        self.timeout = float(timeout)
+
+    def deliver(self, payload: dict, recipient: str) -> dict:
+        if payload.get("synthetic_data") or payload.get("test_only"):
+            raise ValueError("ERS email is disabled for synthetic/demo observations.")
+        if "NASA FIRMS Area API" not in str(payload.get("source", "")):
+            raise ValueError("ERS email is allowed only for a NASA FIRMS Area API observation.")
+        try:
+            acquired = datetime.fromisoformat(str(payload.get("observation_datetime_utc", "")).replace("Z", "+00:00"))
+            if acquired.tzinfo is None:
+                acquired = acquired.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            raise ValueError("The observation has no valid acquisition timestamp.") from None
+        age_hours = (datetime.now(timezone.utc) - acquired.astimezone(timezone.utc)).total_seconds() / 3600
+        if age_hours < -0.25 or age_hours > 144:
+            raise ValueError("ERS email is limited to FIRMS observations from the last six days.")
+        if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}", recipient.strip()):
+            raise ValueError("A valid ERS recipient email is required.")
+
+        message = (
+            "FIREWATCH REVIEW REQUEST — UNCONFIRMED SATELLITE THERMAL ANOMALY\n\n"
+            "This is an informational request for manual authority review. It is not a confirmed wildfire, "
+            "severity assessment, or dispatch instruction. Please verify independently and decide any response.\n\n"
+            f"Observation ID: {payload.get('observation_id', 'unknown')}\n"
+            f"Acquired (UTC): {payload.get('observation_datetime_utc', 'unknown')}\n"
+            f"Coordinates: {payload.get('latitude')}, {payload.get('longitude')}\n"
+            f"Map: {payload.get('map_link', '')}\n"
+            f"Satellite / instrument / product: {payload.get('satellite', 'Unknown')} / "
+            f"{payload.get('instrument', 'Unknown')} / {payload.get('product', 'Unknown')}\n"
+            f"FIRMS confidence category: {payload.get('confidence', 'Unknown')}\n"
+            f"Fire radiative power (MW): {payload.get('frp_mw', 'Unknown')}\n"
+            f"FireWatch review priority (not probability): {payload.get('priority_category', 'Unknown')} "
+            f"({payload.get('priority_score', 'Unknown')})\n"
+            f"Jurisdiction: {payload.get('jurisdiction', 'Unknown — manual review required')}\n"
+            f"Source: {payload.get('source', 'NASA FIRMS Area API')}\n\n"
+            f"Requested by FireWatch: {payload.get('trigger_reason', 'Manual review request')}\n"
+            "No action has been taken by FireWatch. Confirm or reject this observation through your normal process.\n"
+        )
+        form_data = {
+            "_subject": "[FireWatch] Satellite thermal anomaly — manual review requested",
+            "_template": "table",
+            "name": "FireWatch AI review queue",
+            "observation_id": str(payload.get("observation_id", "unknown")),
+            "acquisition_time_utc": str(payload.get("observation_datetime_utc", "unknown")),
+            "coordinates": f"{payload.get('latitude')}, {payload.get('longitude')}",
+            "map_link": str(payload.get("map_link", "")),
+            "satellite_instrument": f"{payload.get('satellite', 'Unknown')} / {payload.get('instrument', 'Unknown')}",
+            "confidence": str(payload.get("confidence", "Unknown")),
+            "frp_mw": str(payload.get("frp_mw", "Unknown")),
+            "review_priority": f"{payload.get('priority_category', 'Unknown')} ({payload.get('priority_score', 'Unknown')})",
+            "jurisdiction": str(payload.get("jurisdiction", "Unknown — manual review required")),
+            "message": message,
+        }
+        endpoint = "https://formsubmit.co/ajax/" + recipient.strip()
+        request = urllib.request.Request(endpoint,
+            data=json.dumps(form_data, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = response.read(64 * 1024).decode("utf-8", errors="replace")
+                if response.status < 200 or response.status >= 300:
+                    raise RuntimeError(f"FormSubmit returned HTTP {response.status}.")
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"FormSubmit returned HTTP {exc.code}; check recipient activation and service status.") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise RuntimeError("Could not reach FormSubmit; no delivery was confirmed.") from None
+        try:
+            result = json.loads(body)
+        except json.JSONDecodeError:
+            raise RuntimeError("FormSubmit returned an unrecognized response; delivery is unconfirmed.") from None
+        if str(result.get("success", "")).lower() not in {"true", "1"}:
+            detail = str(result.get("message", "Submission was not accepted."))[:240]
+            raise RuntimeError(f"FormSubmit did not accept the request: {detail}")
+        return {"status": "provider-accepted",
+                "response": "FormSubmit accepted the review request; inbox delivery and recipient activation are unconfirmed."}
 
 
 def build_notification_payload(observation: dict, *, trigger_reason: str,

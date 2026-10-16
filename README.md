@@ -2,7 +2,7 @@
 
 FireWatch AI is a local Streamlit dashboard for prioritizing possible forest fires in India from NASA FIRMS active-fire **thermal anomaly observations**. It ingests FIRMS-compatible CSVs and optional Forest Survey of India (FSI) forest-fire point exports, validates their rows, and calculates an explainable review-priority score. An FSI match adds forest-area context to the queue. The app records evidence-backed reviewer feedback and event IDs for future evaluation.
 
-A FIRMS hotspot is a satellite thermal anomaly. It is not a confirmed wildfire, a measure of fire severity, a burned-area label, or a substitute for an independent incident report. Scores only help order human review. This application does not contact emergency services or authorities.
+A FIRMS hotspot is a satellite thermal anomaly. It is not a confirmed wildfire, a measure of fire severity, a burned-area label, or a substitute for an independent incident report. Scores only help order human review. FireWatch never dispatches response teams. An operator may explicitly send a limited review request to the user-configured ERS inbox for a recent FIRMS API observation; the recipient must verify it and decide any action.
 
 The FSI context is derived from MODIS/VIIRS satellite hotspots filtered against forest-area boundaries. It can identify a forest-area alert, but it is correlated with FIRMS detections and is not independent fire ground truth. FSI recommends using alerts alongside other sources. The project therefore remains a human-review triage tool; it does not claim prediction accuracy or train an image classifier.
 
@@ -66,7 +66,7 @@ Spatial/time association connects observations when both great-circle distance a
 
 Reviewer feedback is append-only and includes outcome, assessment, optional confidence/notes/reviewer ID, and manually verified jurisdiction. Feedback is not treated as independent ground truth, and the ranking does not learn from it. Jurisdiction fields in source data are not considered verified. Active routing entries require the operator to mark the contact verified and supply a verification date; unmatched observations route to an internal review queue.
 
-Notification creation uses observation/trigger/recipient deduplication and records a payload, routing reason, event history, and status. The default remains local simulation. For the hackathon's generated demo only, the Notification Centre can send an explicitly labeled synthetic test email through configured SMTP. It blocks non-synthetic records and the message states the locations are generated and not a real alert. Configure recipients and SMTP in private `.env` using `FIREWATCH_TEST_RECIPIENTS`, `FIREWATCH_SMTP_HOST`, `FIREWATCH_SMTP_PORT`, `FIREWATCH_SMTP_USERNAME`, `FIREWATCH_SMTP_PASSWORD`, and `FIREWATCH_SMTP_FROM`. SMTP relay acceptance is not proof of inbox delivery. Never configure emergency authorities for this test.
+Notification creation uses observation/trigger/recipient deduplication and records a payload, routing reason, event history, and status. The default remains local simulation. In **Notification Centre**, an operator may explicitly email one selected recent (last six days) NASA FIRMS Area API observation to the configured `FIREWATCH_ERS_EMAIL` using FormSubmit. The email requests authority review, identifies the observation as an unconfirmed thermal anomaly, and explicitly leaves any response decision to the authority. Synthetic, historical-sample, and uploaded records are blocked from this route. FormSubmit requires the recipient to confirm its first-use activation email; an accepted submission does not prove inbox delivery. FormSubmit's documentation says submissions are retained for 30 days, and the selected record's coordinates and metadata are transmitted to that service and the configured inbox. This is a manual per-observation action, not an automatic dispatch or a background alarm. The separate SMTP test route remains restricted to clearly labeled synthetic demo records. Keep all delivery configuration in the ignored local `.env` file.
 
 ## Data storage and configuration
 
@@ -82,6 +82,7 @@ Set these optional environment variables before starting Streamlit:
 - `FIREWATCH_AUTOLOAD_SAMPLE`: `0`/`false` disables the bundled sample import; default is enabled.
 - `FIREWATCH_REVIEWER_ID`: pre-fills and locks the reviewer identifier field.
 - `FIREWATCH_DELIVERY_MODE`: retained for configuration clarity; ordinary notifications remain simulation-only.
+- `FIREWATCH_ERS_EMAIL`: optional destination for manually requested, recent NASA FIRMS review emails through FormSubmit.
 - `FIRMS_MAP_KEY`: optional NASA FIRMS API key. Keep it in a private local `.env` or process environment; never commit it.
 
 The app loads `.env` values with python-dotenv. Keep credentials and private operational data outside Git. The API key is only used for an explicit user-triggered Area API query.

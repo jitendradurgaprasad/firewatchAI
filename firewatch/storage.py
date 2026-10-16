@@ -417,7 +417,7 @@ def add_notification(conn: sqlite3.Connection, *, notification_id: str, observat
             return False
         raise
     conn.execute("INSERT INTO notification_events(notification_id,status,details,created_at) VALUES(?,?,?,?)",
-                 (notification_id, "queued", "Queued for simulation only; no external delivery.", stamp))
+                 (notification_id, "queued", "Queued; no external delivery attempted yet.", stamp))
     conn.commit()
     return True
 
