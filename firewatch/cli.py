@@ -11,7 +11,8 @@ from .data import class_counts, split_by_event, validate_manifest
 from .image_io import load_rgb_image
 from .inference import predict
 from .metrics import classification_metrics
-from .model import ImageManifestDataset, PREPROCESS, load_checkpoint, train_model
+from .model import ImageManifestDataset, PREPROCESS, load_checkpoint, train_model, update_checkpoint_metadata
+from .readiness import inspect_training_manifest
 
 
 def _evaluate(model, rows, device: str) -> dict:
@@ -62,19 +63,31 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(prepare_california_manifest(args.dataset_root, args.output,
                                                      max_nodata_percent=args.max_nodata_percent), indent=2))
     elif args.command == "train":
+        ready, readiness_message, _ = inspect_training_manifest(args.manifest)
+        if not ready:
+            parser.error(f"Training blocked: {readiness_message}")
         rows = validate_manifest(args.manifest)
         partitions = split_by_event(rows, seed=args.seed)
         model = train_model(partitions["train"], partitions["validation"], args.checkpoint,
                             epochs=args.epochs, batch_size=args.batch_size, seed=args.seed)
+        metrics = _evaluate(model, partitions["test"], "cuda")
+        update_checkpoint_metadata(args.checkpoint, {"test_metrics": metrics,
+                                                     "test_samples": len(partitions["test"])})
         print(json.dumps({"checkpoint": str(Path(args.checkpoint)),
                           "split_sizes": {key: len(value) for key, value in partitions.items()},
-                          "test_metrics": _evaluate(model, partitions["test"], "cuda" if torch.cuda.is_available() else "cpu")}, indent=2))
+                          "device": "cuda:0", "test_metrics": metrics}, indent=2))
     elif args.command == "evaluate":
+        ready, readiness_message, _ = inspect_training_manifest(args.manifest)
+        if not ready:
+            parser.error(f"Evaluation blocked: {readiness_message}")
         rows = validate_manifest(args.manifest)
         partitions = split_by_event(rows)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model, _ = load_checkpoint(args.checkpoint, device=device)
-        print(json.dumps({"test_metrics": _evaluate(model, partitions["test"], device)}, indent=2))
+        metrics = _evaluate(model, partitions["test"], device)
+        update_checkpoint_metadata(args.checkpoint, {"test_metrics": metrics,
+                                                     "test_samples": len(partitions["test"])})
+        print(json.dumps({"device": device, "test_metrics": metrics}, indent=2))
     else:
         print(json.dumps(predict(args.image, args.checkpoint, threshold=args.threshold).to_dict(), indent=2))
     return 0

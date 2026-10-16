@@ -1,4 +1,7 @@
 import csv
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PIL import Image
@@ -8,7 +11,8 @@ from firewatch.data import DatasetError, split_by_event, validate_manifest
 from firewatch.image_io import ImageInputError, load_rgb_image
 from firewatch.inference import predict
 from firewatch.metrics import classification_metrics
-from firewatch.model import PREPROCESS, build_model, load_checkpoint, save_checkpoint, train_model
+from firewatch.model import (PREPROCESS, build_model, load_checkpoint, save_checkpoint,
+                             train_model, update_checkpoint_metadata)
 
 
 def make_rgb(path, color=(20, 30, 40)):
@@ -101,9 +105,13 @@ def test_invalid_image_abstains_and_metrics():
 def test_model_checkpoint_roundtrip(tmp_path):
     checkpoint = tmp_path / "model.pt"
     save_checkpoint(build_model(), checkpoint, epoch=1, seed=5)
+    update_checkpoint_metadata(checkpoint, {"trained": True, "test_samples": 2,
+        "test_metrics": {"accuracy": 0.5}, "device": "cuda:0 (test mock)"})
     model, metadata = load_checkpoint(checkpoint)
     assert metadata["architecture"] == "resnet18"
     assert metadata["epoch"] == 1
+    assert metadata["trained"] is True
+    assert metadata["test_metrics"]["accuracy"] == 0.5
     assert not model.training
 
 
@@ -192,3 +200,229 @@ def test_training_refuses_unvalidated_single_class_data(tmp_path):
     rows = [{"image": "missing.png", "label": "ACTIVE_FIRE_EVIDENCE", "event_id": "fire-a"}]
     with pytest.raises(ValueError, match="both validated classes"):
         train_model(rows, rows, tmp_path / "model.pt")
+
+
+def test_training_rejects_weak_mask_provenance(tmp_path):
+    rows = [
+        {"image": "missing.png", "label": label, "event_id": f"event-{index}",
+         "label_source": "HOTMAP_SWIR_mask_presence_weak"}
+        for index, label in enumerate(("ACTIVE_FIRE_EVIDENCE", "NO_VISIBLE_FIRE_EVIDENCE"))
+    ]
+    with pytest.raises(ValueError, match="weak HOTMAP"):
+        train_model(rows, rows, tmp_path / "model.pt")
+
+
+def test_training_does_not_fall_back_to_cpu(tmp_path, monkeypatch):
+    import firewatch.model as model
+
+    monkeypatch.setattr(model.torch.cuda, "is_available", lambda: False)
+    train_rows = [
+        {"image": "unused.png", "label": label, "event_id": f"event-{index}",
+         "label_source": "analyst_review"}
+        for index, label in enumerate(("ACTIVE_FIRE_EVIDENCE", "NO_VISIBLE_FIRE_EVIDENCE"))
+    ]
+    validation_rows = [dict(row, event_id=f"validation-{index}")
+                       for index, row in enumerate(train_rows)]
+    with pytest.raises(RuntimeError, match="no CPU fallback was attempted"):
+        train_model(train_rows, validation_rows, tmp_path / "model.pt", device="cuda")
+
+
+@pytest.fixture
+def qt_app():
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+def test_gui_starts_with_missing_model_and_validates_image(tmp_path, qt_app):
+    from firewatch.gui import FireWatchWindow
+
+    window = FireWatchWindow(dataset_root=tmp_path / "missing-dataset",
+                             checkpoint=tmp_path / "missing.pt")
+    window.dataset_worker.wait(5000)
+    qt_app.processEvents()
+    assert window.model_badge.text() == "MODEL NOT TRAINED"
+    assert not window.detect_button.isEnabled()
+    assert window.train_device.count() == 1
+    assert window.train_device.currentData() == "cuda"
+    image = make_rgb(tmp_path / "preview.png")
+    assert window.set_selected_image(image)
+    assert not window.preview.pixmap().isNull()
+    with Image.open(image) as original:
+        assert original.size == (64, 64)
+    assert not window.detect_button.isEnabled()
+    bad = tmp_path / "bad.jpg"
+    bad.write_text("corrupt")
+    assert not window.set_selected_image(bad)
+    assert "invalid" in window.input_status.text().lower()
+    window.close()
+
+
+def test_gui_displays_structured_prediction_without_fabricating_it(tmp_path, qt_app):
+    from firewatch.gui import FireWatchWindow
+
+    window = FireWatchWindow(dataset_root=tmp_path / "missing-dataset",
+                             checkpoint=tmp_path / "missing.pt")
+    window._show_prediction({"outcome": "UNCERTAIN_OR_UNSUPPORTED", "predicted_class": None,
+                             "confidence_score": None, "score_kind": "unavailable",
+                             "model_id": "firewatch-resnet18", "model_version": "0.1.0",
+                             "input_validation": "valid", "inference_device": "cuda",
+                             "message": "Model score below threshold.", "limitations": []})
+    assert window.result_outcome.text() == "UNCERTAIN_OR_UNSUPPORTED"
+    assert window.confidence.text() == "Confidence: unavailable"
+    assert "0.1.0" in window.result_model_info.text()
+    assert "cuda" in window.input_status.text()
+    window.dataset_worker.wait(5000)
+    window.close()
+
+
+def test_training_readiness_requires_sourced_two_class_splits(tmp_path):
+    from firewatch.readiness import inspect_training_manifest
+
+    manifest = tmp_path / "reviewed.csv"
+    fields = ["image", "label", "event_id", "split", "label_source"]
+    rows = []
+    for index, (event, split) in enumerate((
+            ("train-a", "train"), ("train-b", "train"),
+            ("val-a", "validation"), ("val-b", "validation"),
+            ("test-a", "test"), ("test-b", "test"))):
+        label = "ACTIVE_FIRE_EVIDENCE" if event.endswith("a") else "NO_VISIBLE_FIRE_EVIDENCE"
+        image = make_rgb(tmp_path / f"{event}.png", (20 + index, 30, 40))
+        rows.append({"image": image.name, "label": label, "event_id": event,
+                     "split": split, "label_source": "analyst_review"})
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    ready, message, counts = inspect_training_manifest(manifest)
+    assert ready, message
+    assert counts == {"train": 2, "validation": 2, "test": 2}
+
+    for row in rows:
+        row["label_source"] = "HOTMAP_SWIR_mask_presence_weak"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    ready, message, _ = inspect_training_manifest(manifest)
+    assert not ready
+    assert "Weak HOTMAP" in message
+
+
+def test_cuda_status_reports_cpu_only_environment(monkeypatch):
+    from types import SimpleNamespace
+    import firewatch.gui as gui
+
+    fake_torch = SimpleNamespace(__version__="mock", version=SimpleNamespace(cuda=None),
+        cuda=SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setattr(gui, "_torch_module", lambda: fake_torch)
+    monkeypatch.setattr(gui.shutil, "which", lambda _: None)
+    report = gui.gpu_report()
+    assert report["cuda_available"] is False
+    assert report["device"] is None
+    assert report["status"] == "CUDA unavailable to PyTorch"
+
+
+def test_training_worker_reports_exceptions(tmp_path, monkeypatch):
+    import firewatch.gui as gui
+
+    worker = gui.TrainingWorker(tmp_path / "labels.csv", tmp_path / "model.pt",
+                                epochs=2, batch_size=2, learning_rate=0.001)
+    errors = []
+    worker.failed.connect(errors.append)
+    monkeypatch.setattr(gui, "validate_manifest", lambda _path: (_ for _ in ()).throw(ValueError("bad manifest")))
+    worker.run()
+    assert len(errors) == 1
+    assert "bad manifest" in errors[0]
+
+
+def test_training_worker_keeps_qt_event_loop_responsive(tmp_path, monkeypatch, qt_app):
+    import time
+    from PyQt6.QtCore import QEventLoop, QTimer
+    import firewatch.gui as gui
+    import firewatch.cli as cli
+    import firewatch.model as model
+
+    worker = gui.TrainingWorker(tmp_path / "labels.csv", tmp_path / "model.pt",
+                                epochs=1, batch_size=1, learning_rate=0.001)
+    rows = [{"image": "unused", "label": "ACTIVE_FIRE_EVIDENCE", "event_id": "fire-a"}]
+    parts = {"train": rows, "validation": rows, "test": rows}
+    monkeypatch.setattr(gui, "validate_manifest", lambda _path: rows)
+    monkeypatch.setattr(gui, "split_by_event", lambda _rows: parts)
+
+    def fake_train(*_args, on_progress=None, **_kwargs):
+        time.sleep(0.12)
+        on_progress({"epoch": 1, "epochs": 1, "batch": 1, "batches": 1,
+                     "device": "NVIDIA RTX 2050", "status": "training"})
+        return object()
+
+    monkeypatch.setattr(gui, "_torch_module", lambda: model.torch)
+    monkeypatch.setattr(model, "train_model", fake_train)
+    monkeypatch.setattr(cli, "_evaluate", lambda *_args: {"accuracy": 1.0})
+    monkeypatch.setattr(model, "update_checkpoint_metadata", lambda *_args: None)
+    monkeypatch.setattr(model.torch.cuda, "get_device_name", lambda _index: "NVIDIA RTX 2050")
+
+    loop = QEventLoop()
+    worker.completed.connect(lambda *_args: loop.quit())
+    worker.failed.connect(lambda *_args: loop.quit())
+    worker.progress.connect(lambda _report: None)
+    ticks = []
+    timer = QTimer()
+    timer.setInterval(10)
+    timer.timeout.connect(lambda: ticks.append(1))
+    timer.start()
+    worker.start()
+    QTimer.singleShot(3000, loop.quit)
+    loop.exec()
+    worker.wait(1000)
+    timer.stop()
+    assert len(ticks) >= 3
+
+
+def test_training_worker_retries_cuda_oom_with_smaller_batch(tmp_path, monkeypatch):
+    import firewatch.gui as gui
+    import firewatch.cli as cli
+    import firewatch.model as model
+
+    worker = gui.TrainingWorker(tmp_path / "labels.csv", tmp_path / "model.pt",
+                                epochs=1, batch_size=2, learning_rate=0.001)
+    rows = [{"image": "unused", "label": "ACTIVE_FIRE_EVIDENCE", "event_id": "fire-a"}]
+    monkeypatch.setattr(gui, "validate_manifest", lambda _path: rows)
+    monkeypatch.setattr(gui, "split_by_event", lambda _rows: {"train": rows, "validation": rows, "test": rows})
+    monkeypatch.setattr(gui, "_torch_module", lambda: model.torch)
+    monkeypatch.setattr(model.torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(model.torch.cuda, "get_device_name", lambda _index: "NVIDIA RTX test")
+    calls, progress, completed, failures = [], [], [], []
+
+    def fake_train(*_args, batch_size, **_kwargs):
+        calls.append(batch_size)
+        if batch_size > 1:
+            raise model.torch.cuda.OutOfMemoryError("simulated OOM")
+        return object()
+
+    monkeypatch.setattr(model, "train_model", fake_train)
+    monkeypatch.setattr(cli, "_evaluate", lambda *_args: {"accuracy": 0.5})
+    monkeypatch.setattr(model, "update_checkpoint_metadata", lambda *_args: None)
+    worker.progress.connect(progress.append)
+    worker.completed.connect(lambda *args: completed.append(args))
+    worker.failed.connect(failures.append)
+    worker.run()
+
+    assert calls == [2, 1]
+    assert any(item.get("status") == "memory_retry" and item["batch_size"] == 1
+               for item in progress)
+    assert completed and not failures
+
+
+def test_training_progress_updates_gui(tmp_path, qt_app):
+    from firewatch.gui import FireWatchWindow
+
+    window = FireWatchWindow(dataset_root=tmp_path / "missing-dataset",
+                             checkpoint=tmp_path / "missing.pt")
+    window._training_progress({"epoch": 1, "epochs": 2, "batch": 2,
+                              "batches": 4, "device": "NVIDIA RTX 2050"})
+    assert window.training_progress.value() == 25
+    assert "NVIDIA RTX 2050" in window.training_ready_text.text()
+    window.dataset_worker.wait(5000)
+    window.close()

@@ -1,6 +1,8 @@
 """Small RGB ResNet-18 classifier and reproducible training utilities."""
 
 from pathlib import Path
+from threading import Event
+from typing import Callable
 
 import torch
 from PIL import Image
@@ -42,50 +44,88 @@ def build_model(*, pretrained: bool = False) -> nn.Module:
     return network
 
 
-def save_checkpoint(model: nn.Module, path: str | Path, *, epoch: int, seed: int) -> None:
+def save_checkpoint(model: nn.Module, path: str | Path, *, epoch: int, seed: int,
+                    metadata: dict | None = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "architecture": "resnet18",
                 "labels": LABEL_ORDER, "preprocessing": PREPROCESSING,
-                "epoch": epoch, "seed": seed}, path)
+                "epoch": epoch, "seed": seed, **(metadata or {})}, path)
 
 
 def load_checkpoint(path: str | Path, *, device: str = "cpu") -> tuple[nn.Module, dict]:
     payload = torch.load(path, map_location=device, weights_only=True)
     if payload.get("architecture") != "resnet18" or payload.get("labels") != LABEL_ORDER:
         raise ValueError("Checkpoint architecture or label order is unsupported.")
+    if not payload.get("trained"):
+        raise ValueError("Checkpoint is not marked as a completed training run.")
     model = build_model()
     model.load_state_dict(payload["state_dict"])
     model.to(device).eval()
     return model, payload
 
 
+def update_checkpoint_metadata(path: str | Path, metadata: dict) -> None:
+    """Add evaluation metadata to an already validated model checkpoint."""
+    checkpoint_path = Path(path)
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if payload.get("architecture") != "resnet18" or payload.get("labels") != LABEL_ORDER:
+        raise ValueError("Cannot update metadata on an unsupported checkpoint.")
+    payload.update(metadata)
+    torch.save(payload, checkpoint_path)
+
+
 def train_model(train_rows: list[dict[str, str]], validation_rows: list[dict[str, str]],
                 checkpoint: str | Path, *, epochs: int = 5, batch_size: int = 4,
-                learning_rate: float = 1e-3, seed: int = 42, device: str | None = None) -> nn.Module:
+                learning_rate: float = 1e-3, seed: int = 42, device: str = "cuda",
+                on_progress: Callable[[dict], None] | None = None,
+                stop_event: Event | None = None, num_workers: int = 0) -> nn.Module:
     for split_name, rows in (("train", train_rows), ("validation", validation_rows)):
         labels = {row.get("label") for row in rows}
         if labels != set(LABEL_ORDER):
             raise ValueError(f"{split_name} data must contain both validated classes; found {sorted(labels)}.")
+        for row in rows:
+            source = row.get("label_source", "").strip().lower()
+            if not source:
+                raise ValueError(f"{split_name} rows must document label_source provenance.")
+            if "hotmap" in source or "mask_presence_weak" in source:
+                raise ValueError(f"{split_name} contains weak HOTMAP mask labels; they are not suitable class labels.")
+    train_events = {row.get("event_id") for row in train_rows}
+    validation_events = {row.get("event_id") for row in validation_rows}
+    if None in train_events or None in validation_events or train_events & validation_events:
+        raise ValueError("Training and validation must use non-empty, disjoint fire-event IDs.")
     if epochs < 1 or batch_size < 1 or learning_rate <= 0:
         raise ValueError("epochs, batch_size, and learning_rate must be positive.")
+    if num_workers < 0:
+        raise ValueError("num_workers cannot be negative.")
+    if device != "cuda":
+        raise ValueError("Training is restricted to the NVIDIA CUDA device; CPU fallback is disabled.")
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable; training was not started and no CPU fallback was attempted.")
     torch.manual_seed(seed)
     random_gen = torch.Generator().manual_seed(seed)
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    cuda_name = torch.cuda.get_device_name(0)
     model = build_model().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = nn.CrossEntropyLoss()
     train_loader = DataLoader(ImageManifestDataset(train_rows), batch_size=batch_size,
-                              shuffle=True, generator=random_gen)
-    validation_loader = DataLoader(ImageManifestDataset(validation_rows), batch_size=batch_size)
+                              shuffle=True, generator=random_gen, num_workers=num_workers)
+    validation_loader = DataLoader(ImageManifestDataset(validation_rows), batch_size=batch_size,
+                                   num_workers=num_workers)
     best_loss = float("inf")
     for epoch in range(1, epochs + 1):
         model.train()
-        for images, labels in train_loader:
+        for batch_index, (images, labels) in enumerate(train_loader, start=1):
+            if stop_event is not None and stop_event.is_set():
+                raise InterruptedError("Training was stopped at a batch boundary.")
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad(set_to_none=True)
             loss_fn(model(images), labels).backward()
             optimizer.step()
+            if on_progress:
+                on_progress({"epoch": epoch, "epochs": epochs,
+                              "batch": batch_index, "batches": len(train_loader),
+                              "device": cuda_name, "status": "training"})
         model.eval()
         total_loss = 0.0
         with torch.no_grad():
@@ -93,8 +133,17 @@ def train_model(train_rows: list[dict[str, str]], validation_rows: list[dict[str
                 images, labels = images.to(device), labels.to(device)
                 total_loss += loss_fn(model(images), labels).item() * len(labels)
         val_loss = total_loss / len(validation_loader.dataset)
+        if on_progress:
+            on_progress({"epoch": epoch, "epochs": epochs, "batch": len(train_loader),
+                         "batches": len(train_loader), "validation_loss": val_loss,
+                         "device": cuda_name, "status": "validation"})
         if val_loss < best_loss:
             best_loss = val_loss
-            save_checkpoint(model, checkpoint, epoch=epoch, seed=seed)
+            save_checkpoint(model, checkpoint, epoch=epoch, seed=seed,
+                            metadata={"model_id": "firewatch-resnet18", "model_version": "0.1.0",
+                                      "device": f"cuda:0 ({cuda_name})", "batch_size": batch_size,
+                                      "learning_rate": learning_rate, "epochs_requested": epochs,
+                                      "num_workers": num_workers, "best_validation_loss": val_loss})
+    update_checkpoint_metadata(checkpoint, {"trained": True})
     model, _ = load_checkpoint(checkpoint, device=device)
     return model

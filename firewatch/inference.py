@@ -26,6 +26,7 @@ class Prediction:
     model_id: str
     model_version: str
     input_validation: str
+    inference_device: str
     message: str
     limitations: list[str]
 
@@ -41,10 +42,10 @@ def predict(image_path: str | Path, checkpoint: str | Path, *, threshold: float 
         loaded = load_rgb_image(image_path)
     except ImageInputError as exc:
         return Prediction("UNCERTAIN_OR_UNSUPPORTED", None, None, "unavailable", MODEL_ID,
-                          MODEL_VERSION, "invalid", str(exc), LIMITATIONS)
+                          MODEL_VERSION, "invalid", device, str(exc), LIMITATIONS)
     if not Path(checkpoint).is_file():
         return Prediction("UNCERTAIN_OR_UNSUPPORTED", None, None, "unavailable", MODEL_ID,
-                          MODEL_VERSION, "valid", "Prediction unavailable: trained model weights are missing.", LIMITATIONS)
+                          MODEL_VERSION, "valid", device, "Prediction unavailable: trained model weights are missing.", LIMITATIONS)
     try:
         model, meta = load_checkpoint(checkpoint, device=device)
         if meta.get("preprocessing") != PREPROCESSING:
@@ -57,10 +58,10 @@ def predict(image_path: str | Path, checkpoint: str | Path, *, threshold: float 
         label = LABEL_ORDER[int(index.item())]
         if confidence_value < threshold:
             return Prediction("UNCERTAIN_OR_UNSUPPORTED", None, confidence_value, "uncalibrated_softmax_score",
-                              MODEL_ID, MODEL_VERSION, "valid", "Model score is below the abstention threshold.", LIMITATIONS)
+                              MODEL_ID, MODEL_VERSION, "valid", device, "Model score is below the abstention threshold.", LIMITATIONS)
         outcome = "FIRE EVIDENCE DETECTED" if label == "ACTIVE_FIRE_EVIDENCE" else "NO VISIBLE FIRE EVIDENCE DETECTED"
         return Prediction(outcome, label, confidence_value, "uncalibrated_softmax_score", MODEL_ID,
-                          MODEL_VERSION, "valid", "Classification from the loaded checkpoint.", LIMITATIONS)
+                          MODEL_VERSION, "valid", device, "Classification from the loaded checkpoint.", LIMITATIONS)
     except Exception as exc:
         return Prediction("UNCERTAIN_OR_UNSUPPORTED", None, None, "unavailable", MODEL_ID,
-                          MODEL_VERSION, "valid", f"Inference unavailable: {exc}", LIMITATIONS)
+                          MODEL_VERSION, "valid", device, f"Inference unavailable: {exc}", LIMITATIONS)
