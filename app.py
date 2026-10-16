@@ -35,6 +35,7 @@ from firewatch.storage import (OUTCOMES, add_authority, add_notification, connec
                                load_rejections, resolve_recipient,
                                save_evaluation, save_feedback, save_import,
                                save_forest_context_import, set_setting)
+from firewatch.synthetic_demo import generate_synthetic_forest_demo, write_synthetic_forest_demo
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -388,6 +389,8 @@ def main() -> None:
 
     st.title(page)
     st.caption("Forest-fire hotspot triage. FIRMS and FSI provide satellite thermal-anomaly cues; a match adds forest-area context but does not confirm a wildfire or measure severity.")
+    if not scored.empty and scored.get("source_name", pd.Series(dtype=str)).astype(str).str.contains("SYNTHETIC", case=False).any():
+        st.warning("Synthetic records are loaded. Their generator-defined labels and simulated locations are for software demonstration only; they do not represent real observations or establish real-world accuracy.")
 
     if page == "Overview":
         if scored.empty:
@@ -433,6 +436,36 @@ def main() -> None:
     elif page == "Import Data":
         st.write("Upload FIRMS observations and, optionally, an FSI Fire Point Search CSV. FSI matches add forest-area context to the review score; they are not independent confirmation because FSI uses MODIS/VIIRS detections.")
         st.caption(f"Acquisition timestamps are interpreted as UTC. Interactive CSV limit: {MAX_CSV_BYTES // (1024 * 1024)} MiB. The bundled archive sample works without credentials.")
+        st.subheader("Synthetic forest-fire workflow demo")
+        st.warning("Synthetic scenario data only. These generated examples are not real satellite observations, verified forest locations, or evidence of model accuracy. Do not use for emergency decisions or training a deployable model.")
+        with st.form("synthetic_demo_import"):
+            st.caption("Creates 800 reproducible FIRMS-shaped observations across 40 synthetic events (320 generated forest-fire, 480 generated non-fire) and 480 correlated synthetic forest-context points. The files are saved outside the repository.")
+            include_demo = st.form_submit_button("Generate and load synthetic demo")
+        if include_demo:
+            try:
+                demo = generate_synthetic_forest_demo()
+                generated_files = write_synthetic_forest_demo()
+                if not any(item["import_id"] == "synthetic-forest-demo-v1" for item in imports):
+                    result = ingest_firms_csv(demo.observations_csv,
+                        source_description="SYNTHETIC DEMO — generated scenario records, NOT REAL observations",
+                        licence_attribution="Generated locally by FireWatch; no external dataset or real labels.",
+                        product="Synthetic VIIRS-shaped workflow test data")
+                    save_import(conn, result, import_id="synthetic-forest-demo-v1")
+                context_imports_now = list_forest_context_imports(conn)
+                if not any(item["import_id"] == "synthetic-forest-demo-context-v1" for item in context_imports_now):
+                    context = parse_fsi_points(demo.context_csv)
+                    save_forest_context_import(conn, context,
+                        import_id="synthetic-forest-demo-context-v1",
+                        source="SYNTHETIC DEMO — generated forest context, NOT FSI",
+                        filename="synthetic_forest_context.csv",
+                        retrieved_at=datetime.now(timezone.utc).isoformat(),
+                        metadata={**demo.manifest, "interpretation": "Generated correlated software-demo context; not real forest boundary or independent truth."})
+                st.session_state["data_version"] = str(uuid.uuid4())
+                cached_scored_data.clear()
+                st.success(f"Synthetic demo loaded. Files: {generated_files['output_dir']}. These labels are generator-defined and cannot establish real-world performance.")
+                st.rerun()
+            except (IngestionError, ForestContextError, ValueError, OSError) as exc:
+                st.error(f"Synthetic demo could not be loaded: {exc}")
         with st.form("csv_import", clear_on_submit=True):
             uploaded = st.file_uploader("FIRMS CSV file", type=["csv"], accept_multiple_files=False)
             local_path = st.text_input("Or local CSV path (optional)")

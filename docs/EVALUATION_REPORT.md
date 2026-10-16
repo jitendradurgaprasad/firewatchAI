@@ -71,3 +71,7 @@ Using the configured local NASA key, one current NOAA-20 NRT query for the dashb
 ## Accuracy boundary
 
 The bundled sample contains thermal anomalies and no independent incident-level wildfire truth labels. Precision, recall, F1, probability calibration, and wildfire-model accuracy are therefore not meaningful claims for this application. Synthetic checks verify software behavior only. See [LIMITATIONS.md](LIMITATIONS.md) for known constraints.
+
+## Synthetic end-to-end scenario
+
+Added deterministic generator `python -m firewatch.synthetic_demo` and an Import Data button that generates and loads the same scenario. Verification in this run: 800/800 observation rows accepted (320 generator-labeled forest-fire, 480 generator-labeled non-fire), 480/480 context rows accepted, 40 generated events, and context matching preserves the explicit synthetic source label. Files and manifest were written outside the repository under `%LOCALAPPDATA%\\FireWatchAI-data\\synthetic-demo`. Labels are generator-defined by construction; this confirms the pipeline can process its own scenario, not that it detects real fires. No training or accuracy measurement was performed.

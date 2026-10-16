@@ -38,6 +38,8 @@ Every parsed input row is retained as either a valid observation or a rejected r
 
 Use **Import Data** to add an uploaded CSV or local CSV path. Provide source, product if known, and licence/attribution details. These text fields record what was supplied; the app does not independently verify user-uploaded data rights or authenticity. Review validation counts, download rejection details, then use the map/table and observation details.
 
+For an offline software walkthrough, use **Generate and load synthetic demo** on that page. It creates 800 deterministic FIRMS-shaped rows (320 generator-labeled forest-fire, 480 generator-labeled non-fire) across 40 simulated events, plus 480 simulated forest-context points. Files are written outside the repository to `%LOCALAPPDATA%\\FireWatchAI-data\\synthetic-demo` on Windows (or the user data home on other systems). A manifest records the fixed seed and counts. These are generated scenarios—not real observations, forest boundaries, independent truth, training evidence, or accuracy results.
+
 To add forest-area context, download a CSV from the [FSI Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search) and upload it in the same page's FSI section. The adapter stores FSI points in a separate local table and matches them to FIRMS records within 1 km and 12 hours. FSI points are satellite alerts selected using forest-area boundaries and may reuse the same MODIS/VIIRS detections; the match is not independent ground truth.
 
 ### Optional NASA FIRMS live refresh

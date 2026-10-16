@@ -167,14 +167,14 @@ def match_forest_context(observations: pd.DataFrame, points: pd.DataFrame, *,
     out = observations.copy()
     out["forest_context"] = None
     out["forest_context_matches"] = 0
-    out["forest_context_summary"] = "No FSI forest-point context imported"
+    out["forest_context_summary"] = "No forest-area context imported"
     if out.empty or points.empty:
         return out
-    out["forest_context_summary"] = "No matching FSI forest-area point in the configured window"
+    out["forest_context_summary"] = "No matching forest-area context point in the configured window"
     valid_points = points.loc[points.get("rejection_reason", pd.Series("", index=points.index)).eq("")].copy()
     valid_points = valid_points.dropna(subset=["latitude", "longitude", "fire_datetime"])
     if valid_points.empty:
-        out["forest_context_summary"] = "FSI context imported, but no valid point rows are available"
+        out["forest_context_summary"] = "Forest-area context imported, but no valid point rows are available"
         return out
     valid_points = valid_points.drop_duplicates(
         subset=["fire_datetime", "source_sensor", "latitude", "longitude"])
@@ -202,6 +202,10 @@ def match_forest_context(observations: pd.DataFrame, points: pd.DataFrame, *,
             out.iloc[pos, out.columns.get_loc("forest_context")] = 1.0
             out.iloc[pos, out.columns.get_loc("forest_context_matches")] = int(len(matched))
             labels = [str(valid_points.loc[valid_indices[i], "source_sensor"]) for i in matched[:3]]
+            sources = sorted({str(valid_points.iloc[i].get("context_source") or
+                                  valid_points.iloc[i].get("source_sensor") or "forest-area source")
+                              for i in matched})
             out.iloc[pos, out.columns.get_loc("forest_context_summary")] = (
-                f"Matched {len(matched)} FSI forest-area point(s); sensor(s): {', '.join(labels)}")
+                f"Matched {len(matched)} forest-area context point(s) from {', '.join(sources)}; "
+                f"sensor(s): {', '.join(labels)}")
     return out

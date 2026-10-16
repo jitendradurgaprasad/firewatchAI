@@ -93,3 +93,9 @@
 - Configured the supplied NASA MAP_KEY only in the ignored local `.env`; NASA status endpoint accepted it. Retrieved one-day NOAA-20 NRT for the default India area to `%LOCALAPPDATA%\FireWatchAI-data\FIRMS\live\` (23,897 bytes, SHA-256 `2be4b918d7fadda3e80cc1724c778c16dcecd3f60db538218828522764220a9c`). The adapter accepted all 289 rows. This is unlabeled satellite data, not an accuracy dataset.
 - Added parser/matching/scoring/storage tests and updated the user guide, architecture, evaluation report, limitations, and README to establish the forest-fire focus and label boundaries.
 - Verification: full suite 45 passed; `compileall` passed; `git diff --check` passed. Existing Streamlit empty-state tests rendered the new FSI import and evidence-review UI without exceptions. No ground-truth records were fabricated and no training was run.
+
+## Phase I — reproducible synthetic forest-fire demo (2026-10-16)
+
+- Added a deterministic, seeded offline scenario generator with 800 FIRMS-shaped rows, 40 event IDs, 320 generated forest-fire labels, 480 generated non-fire labels (including false forest alerts, industrial heat, and agricultural burns), and 480 correlated context points. Every row/context source is visibly marked synthetic; generated coordinates do not come from forest boundaries.
+- Added a one-click Import Data workflow with idempotent import IDs and explicit warning. CSVs and manifest are written under local app data outside the Git repository. Synthetic context sources now remain visible in match explanations.
+- Integrity check: observation parser accepted 800/800 rows; context parser accepted 480/480. This is a software demo only; there is still no independently labeled real-world evaluation set, and training/deployment accuracy is unverified.

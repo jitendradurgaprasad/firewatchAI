@@ -18,6 +18,7 @@ from firewatch.storage import (add_authority, add_notification, connect, latest_
                                initialize, load_feedback, load_observation_sources, load_observations, resolve_recipient, save_feedback,
                                save_forest_context_import, load_forest_context_points,
                                load_forest_context_rejections, save_import)
+from firewatch.synthetic_demo import generate_synthetic_forest_demo, write_synthetic_forest_demo
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / "sample_data" / "nasa_firms_viirs_snpp_071223.csv"
@@ -33,6 +34,26 @@ def test_ingestion_preserves_rows_and_rejects_invalid_and_duplicates():
     assert result.valid.iloc[0]["source_record"]
 
 
+def test_synthetic_forest_demo_is_reproducible_valid_and_explicitly_labeled(tmp_path):
+    demo = generate_synthetic_forest_demo()
+    same = generate_synthetic_forest_demo()
+    assert demo.observations_csv == same.observations_csv
+    assert demo.context_csv == same.context_csv
+    assert demo.manifest["synthetic"] is True
+    assert demo.manifest["real_world_observations"] is False
+    assert demo.manifest["class_counts"] == {"forest_fire": 320, "non_fire": 480}
+    assert demo.manifest["event_count"] == 40
+    imported = ingest_firms_csv(demo.observations_csv, source_description="SYNTHETIC demo")
+    context = parse_fsi_points(demo.context_csv)
+    assert imported.report["valid_rows"] == 800
+    assert imported.valid["source_record"].str.contains("synthetic_truth").all()
+    assert context.attrs["valid_rows"] == 480
+    scored = match_forest_context(imported.valid.head(5), context)
+    assert scored["forest_context"].eq(1.0).all()
+    assert scored["forest_context_summary"].str.contains("SYNTHETIC-VIIRS").all()
+    files = write_synthetic_forest_demo(tmp_path)
+    assert Path(files["observations_path"]).parent == tmp_path.resolve()
+    assert Path(files["manifest_path"]).is_file()
 def test_ingestion_empty_and_unsupported_headers_fail_closed():
     with pytest.raises(IngestionError):
         ingest_firms_csv(b"")

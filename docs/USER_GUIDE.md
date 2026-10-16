@@ -18,6 +18,10 @@ The first launch loads the bundled public Academy sample into a SQLite database 
 
 Open **Import Data**. Either select a CSV or enter a local file path; do not provide both. Add the source description, product if known, and attribution/licence note. Uploads and paths are limited to 50 MiB and 100,000 rows. Review the reported row counts, source date coverage, available fields, missing fields, and rejected-row reasons on **Data Validation**. The validation/rejection CSV exports retain original fields. FIRMS acquisition times are normalized to UTC. Duplicate rows after the first copy are rejected.
 
+### Synthetic demo
+
+Choose **Generate and load synthetic demo** to create a repeatable offline workflow scenario. It has 800 generator-labeled observations across 40 events (320 synthetic forest-fire and 480 synthetic non-fire) and 480 deliberately correlated forest-context points. The three output files are saved outside the repository under `%LOCALAPPDATA%\\FireWatchAI-data\\synthetic-demo` on Windows. The app imports each demo source once. All locations, fire labels, and sensor-like values are generated; they are not actual FIRMS observations or verified forests. Use this only to exercise the interface and data flow. It cannot establish accuracy or support real-world emergency response or deployable model training.
+
 ### Add forest-area context from FSI
 
 On the FSI [Forest Fire Point Search](https://fsiforestfire.gov.in/FirePointSearch/Search), filter the dates and area you need and use **Download CSV**. In FireWatch's **Import Data** page, upload that export under **Import Forest Survey of India forest-area context**. FireWatch validates the date/time, sensor, coordinates, and duplicate points while retaining source rows. It matches within 1 km and 12 hours; unmatched observations remain unknown and are not penalized.

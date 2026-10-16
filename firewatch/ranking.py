@@ -181,7 +181,7 @@ def score_observations(
         if factors["forest_context"] is not None:
             match_count = int(result.iloc[i].get("forest_context_matches", 0) or 0)
             summary = result.iloc[i].get("forest_context_summary", "")
-            contributions.append(f"FSI forest-area context: {match_count} spatial/time match(es)" +
+            contributions.append(f"Forest-area context: {match_count} spatial/time match(es)" +
                                  (f" ({summary})" if summary else "") +
                                  "; satellite alerts may share source detections and are not ground truth")
         contributions.append("Review priority only; this is not a fire-severity or confirmation score.")

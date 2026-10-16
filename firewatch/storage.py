@@ -234,7 +234,7 @@ def list_imports(conn: sqlite3.Connection) -> list[dict]:
 def save_forest_context_import(conn: sqlite3.Connection, points: pd.DataFrame, *, import_id: str,
                                source: str, filename: str, retrieved_at: str,
                                metadata: dict | None = None) -> None:
-    """Persist an FSI point CSV and row audit separately from FIRMS observations."""
+    """Persist forest-context points and their row audit separately from FIRMS observations."""
     metadata = dict(metadata or {})
     valid = points.loc[points["rejection_reason"].eq("")] if not points.empty else points
     rejected = points.loc[points["rejection_reason"].ne("")] if not points.empty else points
@@ -246,6 +246,7 @@ def save_forest_context_import(conn: sqlite3.Connection, points: pd.DataFrame, *
                   json.dumps(metadata, ensure_ascii=False), json.dumps(report), now))
     for row in points.to_dict(orient="records"):
         point_id = f"{import_id}:{row['source_row_number']}"
+        row["context_source"] = source
         conn.execute("INSERT INTO forest_context_points VALUES(?,?,?,?,?)",
                      (point_id, import_id, int(row["source_row_number"]),
                       json.dumps(row, ensure_ascii=False, allow_nan=False), now))
